@@ -1,0 +1,63 @@
+[package]
+name = "QStream"
+version = "0.1.0"
+edition = "2024"
+authors = ["snitzelklaus@gmail.com"]
+description = "Post-Quantum Cryptography Streaming Protocol"
+
+[dependencies]
+# PQC algorithms - using actual implementations
+pqcrypto-kyber = "0.8.1"        # CRYSTALS-Kyber implementation
+pqcrypto-dilithium = "0.5.0"    # CRYSTALS-Dilithium implementation
+pqcrypto-traits = "0.3.5"       # Shared traits for PQC algorithms
+
+# Crypto utilities
+chacha20poly1305 = "0.10.1"
+sha2 = "0.10.8"
+rand = "0.9.0"
+hkdf = "0.12.4"
+
+# Serialization and buffers
+bytes = "1.10.1"
+byteorder = "1.5.0"
+serde = { version = "1.0.219", features = ["derive"], optional = true }
+
+# Error handling
+thiserror = "2.0.12"
+
+# Async support
+tokio = { version = "1.44.0", features = ["full"], optional = true }
+
+# FFI
+libc = "0.2.170"
+
+# WASM support
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2.100"
+js-sys = "0.3.77"
+web-sys = { version = "0.3.77", features = [
+  "console"
+]}
+
+[features]
+default = ["std"]
+std = []
+async = ["tokio"]
+serde-support = ["serde"]
+ffi = []
+wasm = ["wasm-bindgen", "js-sys", "web-sys"]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[example]]
+name = "client"
+path = "examples/client.rs"
+required-features = ["std"]
+
+[[example]]
+name = "server"
+path = "examples/server.rs"
+required-features = ["std"]
+
+[profile.release]
