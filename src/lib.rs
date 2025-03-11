@@ -5,14 +5,6 @@ A streaming protocol using NIST's post-quantum cryptography algorithms
 for secure communication across various platforms including C#, embedded systems,
 and web browsers.
 
-## Features
-
-- Post-quantum secure key exchange using ML-KEM (CRYSTALS-Kyber)
-- Digital signatures using ML-DSA (CRYSTALS-Dilithium)
-- Chunked data transmission for efficient streaming
-- Cross-platform compatibility
-- FFI and WebAssembly bindings
-
 ## Example
 
 ```rust
@@ -24,16 +16,21 @@ fn main() -> Result<()> {
     let mut server_session = PqcSession::new()?;
     
     // Client initiates key exchange
-    let (client_public_key, _) = client_session.init_key_exchange()?;
+    let client_public_key = client_session.init_key_exchange()?;
     
     // Server accepts key exchange
-    let (ciphertext, _) = server_session.accept_key_exchange(&client_public_key)?;
+    let ciphertext = server_session.accept_key_exchange(&client_public_key)?;
     
-    // Client processes response
+    // Client processes response to complete key exchange
     client_session.process_key_exchange(&ciphertext)?;
     
-    // Now both sides have established a shared secret
-    // Data can be sent securely
+    // Exchange verification keys and complete authentication.
+    client_session.set_remote_verification_key(server_session.local_verification_key().clone())?;
+    server_session.set_remote_verification_key(client_session.local_verification_key().clone())?;
+    client_session.complete_authentication()?;
+    server_session.complete_authentication()?;
+    
+    // Now both sessions are fully established.
     let message = b"Hello, post-quantum world!";
     let encrypted = client_session.encrypt_and_sign(message)?;
     let decrypted = server_session.verify_and_decrypt(&encrypted)?;
