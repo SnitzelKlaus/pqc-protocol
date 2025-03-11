@@ -215,13 +215,7 @@ impl PqcSession {
         self.remote_public_key = Some(client_public_key.clone());
         
         // Encapsulate to generate shared secret and ciphertext
-        let encapsulation_result = kyber768::encapsulate(client_public_key);
-        // In kyber768::encapsulate, the ciphertext is the first element of the tuple
-        // and the shared secret is the second
-        
-        // Manually extract components to ensure correct types
-        let ciphertext = encapsulation_result.0; // KyberCiphertext
-        let shared_secret = encapsulation_result.1; // KyberSharedSecret
+        let (ciphertext, shared_secret) = kyber768::encapsulate(client_public_key);
         
         // Get shared secret bytes
         let shared_secret_bytes = shared_secret.as_bytes();
@@ -472,7 +466,7 @@ impl PqcSession {
         nonce[4] = msg_type.as_u8();
         
         // Last 7 bytes: random data
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::thread_rng();  // TODO update
         rng.fill_bytes(&mut nonce[5..]);
         
         *GenericArray::from_slice(&nonce)
