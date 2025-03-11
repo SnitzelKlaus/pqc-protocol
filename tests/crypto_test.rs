@@ -1,5 +1,5 @@
 // Tests focusing on the key exchange functionality
-use QStream::{
+use pqc_protocol::{
     PqcSession,
     Result,
     Error,
@@ -25,8 +25,8 @@ fn test_key_exchange_success() -> Result<()> {
     client.process_key_exchange(&ciphertext)?;
     
     // Verify both sides have established a session
-    assert_eq!(client.state(), QStream::session::SessionState::KeyExchangeCompleted);
-    assert_eq!(server.state(), QStream::session::SessionState::KeyExchangeCompleted);
+    assert_eq!(client.state(), pqc_protocol::session::SessionState::KeyExchangeCompleted);
+    assert_eq!(server.state(), pqc_protocol::session::SessionState::KeyExchangeCompleted);
     
     Ok(())
 }
@@ -82,7 +82,7 @@ fn test_reinitialize_key_exchange() -> Result<()> {
     let result = client.init_key_exchange();
     assert!(result.is_err());
     
-    if let Err(QStream::Error::KeyExchange(_)) = result {
+    if let Err(pqc_protocol::Error::KeyExchange(_)) = result {
         // Expected error type
     } else {
         panic!("Expected KeyExchange error, got: {:?}", result);
@@ -107,7 +107,7 @@ fn test_multiple_accept_key_exchange() -> Result<()> {
     let result = server.accept_key_exchange(&public_key);
     assert!(result.is_err());
     
-    if let Err(QStream::Error::KeyExchange(_)) = result {
+    if let Err(pqc_protocol::Error::KeyExchange(_)) = result {
         // Expected error type
     } else {
         panic!("Expected KeyExchange error, got: {:?}", result);

@@ -1,5 +1,5 @@
 // Tests focusing on cryptographic operations
-use QStream::{
+use pqc_protocol::{
     PqcSession,
     Result,
     Error,
@@ -138,13 +138,13 @@ fn test_message_tampering() -> Result<()> {
         assert!(result.is_err(), "Tampering at position {} was not detected", pos);
         
         match result {
-            Err(QStream::Error::Authentication(_)) => {
+            Err(pqc_protocol::Error::Authentication(_)) => {
                 // Expected for signature tampering
             },
-            Err(QStream::Error::Crypto(_)) => {
+            Err(pqc_protocol::Error::Crypto(_)) => {
                 // Expected for data tampering (AEAD failure)
             },
-            Err(QStream::Error::InvalidFormat(_)) => {
+            Err(pqc_protocol::Error::InvalidFormat(_)) => {
                 // Expected for header tampering
             },
             _ => {
@@ -187,7 +187,7 @@ fn test_direct_signing() -> Result<()> {
     let result = verifier.verify(&tampered_data, &signature);
     assert!(result.is_err());
     
-    if let Err(QStream::Error::Authentication(_)) = result {
+    if let Err(pqc_protocol::Error::Authentication(_)) = result {
         // Expected error type
     } else {
         panic!("Expected Authentication error, got: {:?}", result);

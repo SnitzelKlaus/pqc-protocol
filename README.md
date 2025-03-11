@@ -24,7 +24,7 @@ This protocol ensures **quantum-resistant encryption** for secure communication 
 ## Project Structure  
 
 ```
-QStream/
+pqc-protocol/
 ├── Cargo.toml             # Rust package configuration
 ├── README.md              # This file
 ├── src/                   # Core Rust implementation

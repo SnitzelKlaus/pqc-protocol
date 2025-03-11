@@ -1,5 +1,5 @@
-// Integration tests for the QStream library
-use QStream::{
+// Integration tests for the pqc_protocol library
+use pqc_protocol::{
     PqcSession,
     PqcStreamSender,
     Result,
@@ -19,7 +19,7 @@ fn test_full_protocol_flow() -> Result<()> {
     // Create client and server sessions
     let mut client = PqcSession::new()?;
     let mut server = PqcSession::new()?;
-    server.set_role(QStream::session::Role::Server);
+    server.set_role(pqc_protocol::session::Role::Server);
 
     // Step 1: Key Exchange
     println!("Testing key exchange...");
@@ -70,7 +70,7 @@ fn test_full_protocol_flow() -> Result<()> {
     // Step 5: Session Close
     println!("Testing session close...");
     let close_message = client.close();
-    assert_eq!(close_message[1], QStream::MessageType::Close as u8, "Close message type incorrect");
+    assert_eq!(close_message[1], pqc_protocol::MessageType::Close as u8, "Close message type incorrect");
 
     Ok(())
 }
@@ -105,7 +105,7 @@ fn test_invalid_signature() -> Result<()> {
     
     // Should fail with authentication error
     assert!(result.is_err(), "Tampered signature should be rejected");
-    if let Err(QStream::Error::Authentication(_)) = result {
+    if let Err(pqc_protocol::Error::Authentication(_)) = result {
         // Expected error type
     } else {
         panic!("Expected Authentication error, got: {:?}", result);
@@ -178,7 +178,7 @@ fn test_replay_protection() -> Result<()> {
     
     // Should fail with sequence error
     assert!(result.is_err(), "Replayed message should be rejected");
-    if let Err(QStream::Error::InvalidSequence) = result {
+    if let Err(pqc_protocol::Error::InvalidSequence) = result {
         // Expected error type
     } else {
         panic!("Expected InvalidSequence error, got: {:?}", result);
