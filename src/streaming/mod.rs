@@ -9,7 +9,7 @@ pub mod sender;
 pub mod receiver;
 
 // Re-export commonly used items
-pub use sender::{StreamSender, StreamReader};
+pub use sender::StreamSender;
 pub use receiver::StreamReceiver;
 
 // Define a type alias for backward compatibility

@@ -6,11 +6,14 @@ hiding implementation details and providing a more user-friendly interface.
 */
 
 use crate::{
-    error::Result,
+    error::{Result, Error},
     session::{PqcSession, Role, SessionState},
     streaming::{PqcStreamSender, PqcStreamReceiver},
-    crypto::{KyberPublicKey, DilithiumPublicKey},
 };
+
+// Required traits for from_bytes/as_bytes methods
+use pqcrypto_traits::kem::{PublicKey as KemPublicKey, Ciphertext as KemCiphertext};
+use pqcrypto_traits::sign::PublicKey as SignPublicKey;
 
 /// Client-side operations for the PQC protocol
 pub struct PqcClient {
@@ -40,7 +43,7 @@ impl PqcClient {
     pub fn process_response(&mut self, ciphertext: &[u8]) -> Result<Vec<u8>> {
         // Convert bytes to Kyber ciphertext
         let ct = pqcrypto_kyber::kyber768::Ciphertext::from_bytes(ciphertext)
-            .map_err(|_| crate::error::Error::Crypto("Invalid ciphertext format".into()))?;
+            .map_err(|_| Error::Crypto("Invalid ciphertext format".into()))?;
         
         // Process the ciphertext
         self.session.process_key_exchange(&ct)?;
@@ -55,7 +58,7 @@ impl PqcClient {
     pub fn authenticate(&mut self, server_verification_key: &[u8]) -> Result<()> {
         // Convert bytes to Dilithium verification key
         let vk = pqcrypto_dilithium::dilithium3::PublicKey::from_bytes(server_verification_key)
-            .map_err(|_| crate::error::Error::Authentication("Invalid verification key format".into()))?;
+            .map_err(|_| Error::Authentication("Invalid verification key format".into()))?;
         
         // Set the remote verification key
         self.session.set_remote_verification_key(vk)?;
@@ -81,12 +84,11 @@ impl PqcClient {
         self.session.close()
     }
     
-    /// Stream data to the server
+    /// Stream data to the server lazily without materializing all chunks at once.
     pub fn stream<'a>(&'a mut self, data: &'a [u8], chunk_size: Option<usize>) -> impl Iterator<Item = Result<Vec<u8>>> + 'a {
-        let mut sender = PqcStreamSender::new(&mut self.session, chunk_size);
-        sender.stream_data(data)
+        PqcStreamSender::new(&mut self.session, chunk_size).stream_data(data)
     }
-    
+
     /// Create a stream receiver to reassemble chunked data
     pub fn create_receiver(&mut self) -> PqcStreamReceiver {
         PqcStreamReceiver::with_reassembly(&mut self.session)
@@ -128,7 +130,7 @@ impl PqcServer {
     pub fn accept(&mut self, client_public_key: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
         // Convert bytes to Kyber public key
         let pk = pqcrypto_kyber::kyber768::PublicKey::from_bytes(client_public_key)
-            .map_err(|_| crate::error::Error::Crypto("Invalid public key format".into()))?;
+            .map_err(|_| Error::Crypto("Invalid public key format".into()))?;
         
         // Accept the key exchange
         let ciphertext = self.session.accept_key_exchange(&pk)?;
@@ -146,7 +148,7 @@ impl PqcServer {
     pub fn authenticate(&mut self, client_verification_key: &[u8]) -> Result<()> {
         // Convert bytes to Dilithium verification key
         let vk = pqcrypto_dilithium::dilithium3::PublicKey::from_bytes(client_verification_key)
-            .map_err(|_| crate::error::Error::Authentication("Invalid verification key format".into()))?;
+            .map_err(|_| Error::Authentication("Invalid verification key format".into()))?;
         
         // Set the remote verification key
         self.session.set_remote_verification_key(vk)?;
@@ -172,10 +174,9 @@ impl PqcServer {
         self.session.close()
     }
     
-    /// Stream data to the client
+    /// Stream data to the client lazily.
     pub fn stream<'a>(&'a mut self, data: &'a [u8], chunk_size: Option<usize>) -> impl Iterator<Item = Result<Vec<u8>>> + 'a {
-        let mut sender = PqcStreamSender::new(&mut self.session, chunk_size);
-        sender.stream_data(data)
+        PqcStreamSender::new(&mut self.session, chunk_size).stream_data(data)
     }
     
     /// Create a stream receiver to reassemble chunked data

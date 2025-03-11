@@ -225,8 +225,8 @@ mod tests {
     
     #[test]
     fn test_role_permissions() {
-        let mut client = StateManager::new(Role::Client);
-        let mut server = StateManager::new(Role::Server);
+        let client = StateManager::new(Role::Client);
+        let server = StateManager::new(Role::Server);
         
         assert!(client.can_init_key_exchange());
         assert!(!server.can_init_key_exchange());

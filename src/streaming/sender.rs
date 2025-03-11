@@ -37,7 +37,7 @@ impl<'a> StreamSender<'a> {
     ///
     /// Takes a byte slice and returns an iterator that yields encrypted
     /// chunks of data ready to be sent.
-    pub fn stream_data<'b>(&'b mut self, data: &'b [u8]) -> impl Iterator<Item = Result<Vec<u8>>> + 'b {
+    pub fn stream_data(self, data: &'a [u8]) -> impl Iterator<Item = Result<Vec<u8>>> + 'a {
         data.chunks(self.chunk_size)
             .map(move |chunk| self.session.encrypt_and_sign(chunk))
     }
@@ -94,7 +94,6 @@ impl<'a, 'b, R: Read> Iterator for StreamReader<'a, 'b, R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::PqcSession;
     
     // Mock session for testing
     fn create_mock_session() -> Result<PqcSession> {

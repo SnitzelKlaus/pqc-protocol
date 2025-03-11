@@ -1,176 +1,357 @@
 /*!
-Session state management for the PQC protocol.
+Session management for the PQC protocol.
 
-This module defines session states and the state machine for session progression.
+This module provides the main session management class that handles the 
+key exchange, authentication, and secure communication.
 */
 
-use std::fmt;
+use crate::{
+    error::{Result, Error, key_exchange_err, auth_err, protocol_err},
+    constants::sizes,
+    crypto::{
+        KeyExchange, Cipher, Authentication,
+        KyberPublicKey, KyberSecretKey, KyberCiphertext,
+        DilithiumPublicKey, DilithiumSecretKey, DilithiumSignature,
+    },
+    message::{
+        MessageType, MessageBuilder, MessageParser,
+    },
+};
 
-/// Session state for tracking connection progress
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum SessionState {
-    /// Session is new, no keys exchanged
-    New,
-    /// Key exchange initiated (client side)
-    KeyExchangeInitiated,
-    /// Key exchange completed (after client processed server response)
-    KeyExchangeCompleted,
-    /// Authentication initiated (verification keys exchanged)
-    AuthenticationInitiated,
-    /// Authentication completed (verification keys verified)
-    AuthenticationCompleted,
-    /// Session established and ready for data transfer
-    Established,
-    /// Session closed
-    Closed,
+
+use std::sync::atomic::{AtomicU32, Ordering};
+use pqcrypto_traits::kem::
+    SharedSecret
+;
+use pqcrypto_traits::sign::
+    DetachedSignature
+;
+
+use super::state::{StateManager, SessionState, Role};
+
+/// Main session manager for the PQC protocol
+pub struct SessionManager {
+    /// State manager to track session progress
+    state_manager: StateManager,
+    
+    // Kyber key exchange pairs
+    kyber_public_key: Option<KyberPublicKey>,
+    kyber_secret_key: Option<KyberSecretKey>,
+    
+    // Dilithium signature pairs
+    dilithium_public_key: DilithiumPublicKey,
+    dilithium_secret_key: DilithiumSecretKey,
+    remote_verification_key: Option<DilithiumPublicKey>,
+    
+    // Symmetric encryption
+    encryption_key: Option<[u8; sizes::chacha::KEY_SIZE]>,
+    cipher: Option<Cipher>,
+    
+    // Sequence tracking
+    send_sequence: AtomicU32,
+    recv_sequence: AtomicU32,
 }
 
-impl fmt::Display for SessionState {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            SessionState::New => write!(f, "New"),
-            SessionState::KeyExchangeInitiated => write!(f, "KeyExchangeInitiated"),
-            SessionState::KeyExchangeCompleted => write!(f, "KeyExchangeCompleted"),
-            SessionState::AuthenticationInitiated => write!(f, "AuthenticationInitiated"),
-            SessionState::AuthenticationCompleted => write!(f, "AuthenticationCompleted"),
-            SessionState::Established => write!(f, "Established"),
-            SessionState::Closed => write!(f, "Closed"),
-        }
-    }
-}
-
-/// Endpoint role in the session
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Role {
-    /// Client role (initiates connection)
-    Client,
-    /// Server role (accepts connection)
-    Server,
-}
-
-impl fmt::Display for Role {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Role::Client => write!(f, "Client"),
-            Role::Server => write!(f, "Server"),
-        }
-    }
-}
-
-/// Session state manager
-///
-/// Handles state transitions and validation of operations
-/// based on the current session state.
-#[derive(Debug, Clone, Copy)]
-pub struct StateManager {
-    /// Current state of the session
-    state: SessionState,
-    /// Role of this endpoint
-    role: Role,
-}
-
-impl StateManager {
-    /// Create a new state manager
-    pub fn new(role: Role) -> Self {
-        Self {
-            state: SessionState::New,
-            role,
-        }
+impl SessionManager {
+    /// Create a new session manager
+    pub fn new() -> Result<Self> {
+        // Generate Dilithium key pair
+        let (dilithium_public_key, dilithium_secret_key) = Authentication::generate_keypair();
+        
+        let state_manager = StateManager::new(Role::Client);
+        
+        Ok(Self {
+            state_manager,
+            kyber_public_key: None,
+            kyber_secret_key: None,
+            dilithium_public_key,
+            dilithium_secret_key,
+            remote_verification_key: None,
+            encryption_key: None,
+            cipher: None,
+            send_sequence: AtomicU32::new(0),
+            recv_sequence: AtomicU32::new(0),
+        })
     }
     
-    /// Get the current state
-    pub fn state(&self) -> SessionState {
-        self.state
-    }
-    
-    /// Get the role
-    pub fn role(&self) -> Role {
-        self.role
-    }
-    
-    /// Set a new role
+    /// Set the role of this session (client or server)
     pub fn set_role(&mut self, role: Role) {
-        self.role = role;
+        self.state_manager.set_role(role);
     }
     
-    /// Check if the session is in the given state
-    pub fn is_state(&self, state: SessionState) -> bool {
-        self.state == state
+    /// Get the current session state
+    pub fn state(&self) -> SessionState {
+        self.state_manager.state()
     }
     
-    /// Check if the session is in any of the given states
-    pub fn is_in_states(&self, states: &[SessionState]) -> bool {
-        states.contains(&self.state)
+    /// Get the local verification key
+    pub fn local_verification_key(&self) -> &DilithiumPublicKey {
+        &self.dilithium_public_key
     }
     
-    /// Check if the current state is at least the given state
-    /// (based on the natural progression of states)
-    pub fn is_at_least(&self, state: SessionState) -> bool {
-        self.state >= state
-    }
-    
-    /// Check if a key exchange initialization is allowed
-    pub fn can_init_key_exchange(&self) -> bool {
-        self.role == Role::Client && self.state == SessionState::New
-    }
-    
-    /// Check if accepting a key exchange is allowed
-    pub fn can_accept_key_exchange(&self) -> bool {
-        self.role == Role::Server && self.state == SessionState::New
-    }
-    
-    /// Check if processing a key exchange response is allowed
-    pub fn can_process_key_exchange(&self) -> bool {
-        self.role == Role::Client && self.state == SessionState::KeyExchangeInitiated
-    }
-    
-    /// Check if setting the verification key is allowed
-    pub fn can_set_verification_key(&self) -> bool {
-        self.state >= SessionState::KeyExchangeCompleted
-    }
-    
-    /// Check if completing authentication is allowed
-    pub fn can_complete_authentication(&self) -> bool {
-        self.state == SessionState::AuthenticationInitiated
-    }
-    
-    /// Check if data transfer is allowed
-    pub fn can_transfer_data(&self) -> bool {
-        self.state == SessionState::Established
-    }
-    
-    /// Transition to the key exchange initiated state
-    pub fn transition_to_key_exchange_initiated(&mut self) {
-        if self.can_init_key_exchange() {
-            self.state = SessionState::KeyExchangeInitiated;
+    /// Initialize key exchange (client side)
+    pub fn init_key_exchange(&mut self) -> Result<KyberPublicKey> {
+        if !self.state_manager.can_init_key_exchange() {
+            return key_exchange_err("Cannot initialize key exchange in current state");
         }
+        
+        // Generate key pair
+        let (public_key, secret_key) = KeyExchange::generate_keypair();
+        
+        // Store keys
+        self.kyber_public_key = Some(public_key.clone());
+        self.kyber_secret_key = Some(secret_key);
+        
+        // Update state
+        self.state_manager.transition_to_key_exchange_initiated();
+        
+        Ok(public_key)
     }
     
-    /// Transition to the key exchange completed state
-    pub fn transition_to_key_exchange_completed(&mut self) {
-        if self.state == SessionState::KeyExchangeInitiated || 
-           self.state == SessionState::New {
-            self.state = SessionState::KeyExchangeCompleted;
+    /// Accept key exchange (server side)
+    pub fn accept_key_exchange(&mut self, client_public_key: &KyberPublicKey) -> Result<KyberCiphertext> {
+        if !self.state_manager.can_accept_key_exchange() {
+            return key_exchange_err("Cannot accept key exchange in current state");
         }
+        
+        // Encapsulate shared secret
+        let (shared_secret, ciphertext) = KeyExchange::encapsulate(client_public_key);
+        
+        // Derive encryption key
+        let encryption_key = match KeyExchange::derive_encryption_key(shared_secret.as_bytes()) {
+            Ok(key) => key,
+            Err(e) => return Err(e),
+        };
+        
+        // Initialize cipher
+        self.encryption_key = Some(encryption_key);
+        self.cipher = Some(Cipher::new(&encryption_key));
+        
+        // Update state
+        self.state_manager.transition_to_key_exchange_completed();
+        
+        Ok(ciphertext)
     }
     
-    /// Transition to the authentication initiated state
-    pub fn transition_to_authentication_initiated(&mut self) {
-        if self.state == SessionState::KeyExchangeCompleted {
-            self.state = SessionState::AuthenticationInitiated;
+    /// Process key exchange response (client side)
+    pub fn process_key_exchange(&mut self, ciphertext: &KyberCiphertext) -> Result<()> {
+        if !self.state_manager.can_process_key_exchange() {
+            return key_exchange_err("Cannot process key exchange in current state");
         }
+        
+        let secret_key = self.kyber_secret_key.as_ref()
+            .ok_or_else(|| Error::Internal("Secret key not available".into()))?;
+        
+        // Decapsulate shared secret
+        let shared_secret = KeyExchange::decapsulate(ciphertext, secret_key);
+        
+        // Derive encryption key
+        let encryption_key = match KeyExchange::derive_encryption_key(shared_secret.as_bytes()) {
+            Ok(key) => key,
+            Err(e) => return Err(e),
+        };
+        
+        // Initialize cipher
+        self.encryption_key = Some(encryption_key);
+        self.cipher = Some(Cipher::new(&encryption_key));
+        
+        // Update state
+        self.state_manager.transition_to_key_exchange_completed();
+        
+        Ok(())
     }
     
-    /// Transition to the established state
-    pub fn transition_to_established(&mut self) {
-        if self.state == SessionState::AuthenticationInitiated {
-            self.state = SessionState::Established;
+    /// Set the remote verification key
+    pub fn set_remote_verification_key(&mut self, key: DilithiumPublicKey) -> Result<()> {
+        if !self.state_manager.can_set_verification_key() {
+            return auth_err("Cannot set verification key in current state");
         }
+        
+        self.remote_verification_key = Some(key);
+        self.state_manager.transition_to_authentication_initiated();
+        
+        Ok(())
     }
     
-    /// Transition to the closed state
-    pub fn transition_to_closed(&mut self) {
-        self.state = SessionState::Closed;
+    /// Complete authentication
+    pub fn complete_authentication(&mut self) -> Result<()> {
+        if !self.state_manager.can_complete_authentication() {
+            return auth_err("Cannot complete authentication in current state");
+        }
+        
+        if self.remote_verification_key.is_none() {
+            return auth_err("Remote verification key not set");
+        }
+        
+        // At this point, we would normally verify a challenge
+        // For now, we'll just transition to the established state
+        self.state_manager.transition_to_established();
+        
+        Ok(())
+    }
+    
+    /// Encrypt and sign data
+    pub fn encrypt_and_sign(&mut self, data: &[u8]) -> Result<Vec<u8>> {
+        if !self.state_manager.can_transfer_data() {
+            return protocol_err("Cannot transfer data in current state");
+        }
+        
+        let cipher = self.cipher.as_ref()
+            .ok_or_else(|| Error::Internal("Cipher not initialized".into()))?;
+        
+        // Get sequence number
+        let seq_num = self.send_sequence.fetch_add(1, Ordering::SeqCst);
+        
+        // Create nonce
+        let nonce = Cipher::create_nonce(seq_num, MessageType::Data);
+        
+        // Encrypt data
+        let encrypted = match cipher.encrypt(&nonce, data) {
+            Ok(e) => e,
+            Err(e) => return Err(e),
+        };
+        
+        // Sign the encrypted data
+        let signature = Authentication::sign(&encrypted, &self.dilithium_secret_key);
+        
+        // Create message
+        let message = MessageBuilder::new(MessageType::Data, seq_num)
+            .with_payload(encrypted)
+            .with_signature(signature.as_bytes().to_vec())
+            .build();
+        
+        Ok(message)
+    }
+    
+    /// Verify and decrypt data
+    pub fn verify_and_decrypt(&mut self, message: &[u8]) -> Result<Vec<u8>> {
+        if !self.state_manager.can_transfer_data() {
+            return protocol_err("Cannot transfer data in current state");
+        }
+        
+        let cipher = self.cipher.as_ref()
+            .ok_or_else(|| Error::Internal("Cipher not initialized".into()))?;
+        
+        let verification_key = self.remote_verification_key.as_ref()
+            .ok_or_else(|| Error::Authentication("Remote verification key not set".into()))?;
+        
+        // Parse message
+        let parser = match MessageParser::new(message) {
+            Ok(p) => p,
+            Err(e) => return Err(e),
+        };
+        
+        let header = parser.header();
+        
+        // Check sequence number
+        let expected_seq = self.recv_sequence.load(Ordering::SeqCst);
+        if header.seq_num != expected_seq {
+            return Err(Error::InvalidSequence);
+        }
+        
+        // Get signature
+        let signature = match parser.signature(Authentication::signature_size()) {
+            Ok(s) => s,
+            Err(e) => return Err(e),
+        };
+        
+        let signature = match Authentication::signature_from_bytes(signature) {
+            Ok(s) => s,
+            Err(e) => return Err(e),
+        };
+        
+        // Get payload
+        let encrypted = match parser.payload(Authentication::signature_size()) {
+            Ok(p) => p,
+            Err(e) => return Err(e),
+        };
+        
+        // Verify signature
+        match Authentication::verify(encrypted, &signature, verification_key) {
+            Ok(_) => {},
+            Err(e) => return Err(e),
+        }
+        
+        // Create nonce
+        let nonce = Cipher::create_nonce(header.seq_num, header.msg_type);
+        
+        // Decrypt data
+        let decrypted = match cipher.decrypt(&nonce, encrypted) {
+            Ok(d) => d,
+            Err(e) => return Err(e),
+        };
+        
+        // Increment sequence number
+        self.recv_sequence.fetch_add(1, Ordering::SeqCst);
+        
+        Ok(decrypted)
+    }
+    
+    /// Sign data
+    pub fn sign(&self, data: &[u8]) -> Result<DilithiumSignature> {
+        Ok(Authentication::sign(data, &self.dilithium_secret_key))
+    }
+    
+    /// Verify a signature
+    pub fn verify(&self, data: &[u8], signature: &DilithiumSignature) -> Result<()> {
+        let verification_key = self.remote_verification_key.as_ref()
+            .ok_or_else(|| Error::Authentication("Remote verification key not set".into()))?;
+        
+        Authentication::verify(data, signature, verification_key)
+    }
+    
+    /// Generate an acknowledgment message
+    pub fn generate_ack(&mut self, seq_num: u32) -> Vec<u8> {
+        let ack_seq = self.send_sequence.fetch_add(1, Ordering::SeqCst);
+        
+        // Create message with the ACK sequence number as payload
+        let payload = seq_num.to_be_bytes().to_vec();
+        
+        MessageBuilder::new(MessageType::Ack, ack_seq)
+            .with_payload(payload)
+            .build()
+    }
+    
+    /// Process an acknowledgment message
+    pub fn process_ack(&self, message: &[u8]) -> Result<u32> {
+        // Parse message
+        let parser = match MessageParser::new(message) {
+            Ok(p) => p,
+            Err(e) => return Err(e),
+        };
+        
+        let header = parser.header();
+        
+        if header.msg_type != MessageType::Ack {
+            return protocol_err("Not an acknowledgment message");
+        }
+        
+        let payload = match parser.payload(0) {
+            Ok(p) => p,
+            Err(e) => return Err(e),
+        };
+        
+        if payload.len() != 4 {
+            return protocol_err("Invalid acknowledgment payload");
+        }
+        
+        let mut buf = [0u8; 4];
+        buf.copy_from_slice(payload);
+        let seq_num = u32::from_be_bytes(buf);
+        
+        Ok(seq_num)
+    }
+    
+    /// Close the session
+    pub fn close(&mut self) -> Vec<u8> {
+        let close_seq = self.send_sequence.fetch_add(1, Ordering::SeqCst);
+        
+        // Update state
+        self.state_manager.transition_to_closed();
+        
+        // Create close message
+        MessageBuilder::new(MessageType::Close, close_seq)
+            .build()
     }
 }
 
@@ -179,59 +360,71 @@ mod tests {
     use super::*;
     
     #[test]
-    fn test_state_transitions() {
-        let mut manager = StateManager::new(Role::Client);
+    fn test_session_lifecycle() -> Result<()> {
+        let mut client = SessionManager::new()?;
+        let mut server = SessionManager::new()?;
+        server.set_role(Role::Server);
         
-        assert_eq!(manager.state(), SessionState::New);
-        assert!(manager.can_init_key_exchange());
+        // Key exchange
+        let client_public_key = client.init_key_exchange()?;
+        let ciphertext = server.accept_key_exchange(&client_public_key)?;
+        client.process_key_exchange(&ciphertext)?;
         
-        manager.transition_to_key_exchange_initiated();
-        assert_eq!(manager.state(), SessionState::KeyExchangeInitiated);
-        assert!(manager.can_process_key_exchange());
+        // Authentication
+        client.set_remote_verification_key(server.local_verification_key().clone())?;
+        server.set_remote_verification_key(client.local_verification_key().clone())?;
+        client.complete_authentication()?;
+        server.complete_authentication()?;
         
-        manager.transition_to_key_exchange_completed();
-        assert_eq!(manager.state(), SessionState::KeyExchangeCompleted);
-        assert!(manager.can_set_verification_key());
+        // Data transfer
+        let test_data = b"Hello, PQC world!";
+        let encrypted = client.encrypt_and_sign(test_data)?;
+        let decrypted = server.verify_and_decrypt(&encrypted)?;
         
-        manager.transition_to_authentication_initiated();
-        assert_eq!(manager.state(), SessionState::AuthenticationInitiated);
-        assert!(manager.can_complete_authentication());
+        assert_eq!(test_data, &decrypted[..]);
         
-        manager.transition_to_established();
-        assert_eq!(manager.state(), SessionState::Established);
-        assert!(manager.can_transfer_data());
+        // Close
+        client.close();
+        server.close();
         
-        manager.transition_to_closed();
-        assert_eq!(manager.state(), SessionState::Closed);
+        assert_eq!(client.state(), SessionState::Closed);
+        assert_eq!(server.state(), SessionState::Closed);
+        
+        Ok(())
     }
     
     #[test]
-    fn test_invalid_transitions() {
-        let mut manager = StateManager::new(Role::Client);
+    fn test_sequence_validation() -> Result<()> {
+        let mut client = SessionManager::new()?;
+        let mut server = SessionManager::new()?;
+        server.set_role(Role::Server);
         
-        // Try transitioning to established without going through other states
-        manager.transition_to_established();
-        assert_eq!(manager.state(), SessionState::New);
+        // Setup secure session
+        let client_public_key = client.init_key_exchange()?;
+        let ciphertext = server.accept_key_exchange(&client_public_key)?;
+        client.process_key_exchange(&ciphertext)?;
         
-        // Try transitioning to authentication initiated without key exchange
-        manager.transition_to_authentication_initiated();
-        assert_eq!(manager.state(), SessionState::New);
+        client.set_remote_verification_key(server.local_verification_key().clone())?;
+        server.set_remote_verification_key(client.local_verification_key().clone())?;
+        client.complete_authentication()?;
+        server.complete_authentication()?;
         
-        // Set appropriate state then try to skip ahead
-        manager.transition_to_key_exchange_initiated();
-        manager.transition_to_established();
-        assert_eq!(manager.state(), SessionState::KeyExchangeInitiated);
-    }
-    
-    #[test]
-    fn test_role_permissions() {
-        let mut client = StateManager::new(Role::Client);
-        let mut server = StateManager::new(Role::Server);
+        // Send first message
+        let test_data = b"First message";
+        let encrypted = client.encrypt_and_sign(test_data)?;
+        let decrypted = server.verify_and_decrypt(&encrypted)?;
+        assert_eq!(test_data, &decrypted[..]);
         
-        assert!(client.can_init_key_exchange());
-        assert!(!server.can_init_key_exchange());
+        // Try to replay the same message
+        let result = server.verify_and_decrypt(&encrypted);
+        assert!(matches!(result, Err(Error::InvalidSequence)));
         
-        assert!(!client.can_accept_key_exchange());
-        assert!(server.can_accept_key_exchange());
+        // Send second message
+        let test_data2 = b"Second message";
+        let encrypted2 = client.encrypt_and_sign(test_data2)?;
+        let decrypted2 = server.verify_and_decrypt(&encrypted2)?;
+        assert_eq!(test_data2, &decrypted2[..]);
+        
+        Ok(())
     }
 }

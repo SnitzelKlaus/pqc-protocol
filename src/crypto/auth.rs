@@ -5,7 +5,7 @@ This module provides functions for digital signatures and verification
 using Dilithium.
 */
 
-use crate::error::{Result, auth_err};
+use crate::error::{Result, Error};
 
 use pqcrypto_dilithium::{
     dilithium3,
@@ -36,7 +36,7 @@ impl Authentication {
     pub fn verify(data: &[u8], signature: &DilithiumSignature, public_key: &DilithiumPublicKey) -> Result<()> {
         match dilithium3::verify_detached_signature(signature, data, public_key) {
             Ok(_) => Ok(()),
-            Err(_) => auth_err("Signature verification failed"),
+            Err(_) => Err(Error::Authentication("Signature verification failed".into())),
         }
     }
     
@@ -49,7 +49,7 @@ impl Authentication {
     pub fn signature_from_bytes(bytes: &[u8]) -> Result<DilithiumSignature> {
         match DilithiumSignature::from_bytes(bytes) {
             Ok(sig) => Ok(sig),
-            Err(_) => auth_err("Invalid signature format"),
+            Err(_) => Err(Error::Authentication("Invalid signature format".into())),
         }
     }
 }

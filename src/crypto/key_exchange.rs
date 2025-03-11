@@ -7,7 +7,7 @@ of the protocol using Kyber.
 
 use crate::{
     constants::{sizes, HKDF_SALT, HKDF_INFO_CHACHA},
-    error::{Result, crypto_err},
+    error::{Result, Error},
 };
 
 use pqcrypto_kyber::{
@@ -16,10 +16,10 @@ use pqcrypto_kyber::{
         PublicKey as KyberPublicKey,
         SecretKey as KyberSecretKey,
         Ciphertext as KyberCiphertext,
+        SharedSecret as KyberSharedSecret,
     }
 };
 
-use pqcrypto_traits::kem::SharedSecret;
 use hkdf::Hkdf;
 use sha2::Sha256;
 
@@ -33,12 +33,12 @@ impl KeyExchange {
     }
     
     /// Encapsulate a shared secret using the receiver's public key (sender side)
-    pub fn encapsulate(public_key: &KyberPublicKey) -> (SharedSecret, KyberCiphertext) {
+    pub fn encapsulate(public_key: &KyberPublicKey) -> (KyberSharedSecret, KyberCiphertext) {
         kyber768::encapsulate(public_key)
     }
     
     /// Decapsulate a shared secret from a ciphertext (receiver side)
-    pub fn decapsulate(ciphertext: &KyberCiphertext, secret_key: &KyberSecretKey) -> SharedSecret {
+    pub fn decapsulate(ciphertext: &KyberCiphertext, secret_key: &KyberSecretKey) -> KyberSharedSecret {
         kyber768::decapsulate(ciphertext, secret_key)
     }
     
@@ -47,9 +47,8 @@ impl KeyExchange {
         let mut okm = [0u8; sizes::chacha::KEY_SIZE];
         let hkdf = Hkdf::<Sha256>::new(Some(HKDF_SALT), shared_secret);
         
-        if hkdf.expand(HKDF_INFO_CHACHA, &mut okm).is_err() {
-            return crypto_err("HKDF key derivation failed");
-        }
+        hkdf.expand(HKDF_INFO_CHACHA, &mut okm)
+            .map_err(|e| Error::Crypto(format!("HKDF key derivation failed: {}", e)))?;
         
         Ok(okm)
     }
@@ -58,6 +57,8 @@ impl KeyExchange {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use pqcrypto_traits::kem::SharedSecret;
     
     #[test]
     fn test_kyber_key_exchange() {
@@ -70,7 +71,7 @@ mod tests {
         // Decapsulate to get the same shared secret
         let decap_secret = KeyExchange::decapsulate(&ciphertext, &secret_key);
         
-        // Check that the shared secrets match
+        // Check that the shared secrets match by calling the `.as_bytes()` method:
         assert_eq!(encap_secret.as_bytes(), decap_secret.as_bytes());
     }
     
