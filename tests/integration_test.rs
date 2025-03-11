@@ -1,3 +1,5 @@
+// TODO - Update to work with new project structure
+
 // tests/integration_tests.rs
 use pqc_protocol::{
     PqcSession,

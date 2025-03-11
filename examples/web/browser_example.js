@@ -1,3 +1,5 @@
+// TODO - Update to work with new project structure
+
 // Example of using PQC Protocol in a browser via WebAssembly
 import init, {
   WasmPqcSession,

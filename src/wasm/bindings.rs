@@ -3,15 +3,15 @@ WebAssembly bindings for the PQC protocol.
 */
 
 use wasm_bindgen::prelude::*;
-use js_sys::{Uint8Array, Error as JsError};
+use js_sys::{Uint8Array, Array, Error as JsError};
 use web_sys::console;
 
-use crate::PqcSession;
-use pqcrypto_kyber::kyber768;
-use pqcrypto_dilithium::dilithium3;
-use pqcrypto_traits::{
-    kem::{PublicKey as KemPublicKey, SecretKey as KemSecretKey, Ciphertext as KemCiphertext},
-    sign::{PublicKey as SignPublicKey, SecretKey as SignSecretKey, DetachedSignature},
+use crate::{
+    session::{PqcSession, Role, SessionState},
+    streaming::{PqcStreamSender, PqcStreamReceiver},
+    constants::{VERSION, sizes, MAX_CHUNK_SIZE},
+    message::MessageType,
+    crypto::{KyberPublicKey, KyberCiphertext, DilithiumPublicKey, DilithiumSignature},
 };
 
 /// WebAssembly wrapper for the PQC protocol session
@@ -31,6 +31,27 @@ impl WasmPqcSession {
         match PqcSession::new() {
             Ok(session) => Ok(Self { session }),
             Err(e) => Err(JsError::new(&format!("Failed to create session: {}", e)).into()),
+        }
+    }
+    
+    /// Set the role of this session (client or server)
+    #[wasm_bindgen]
+    pub fn set_role(&mut self, is_server: bool) {
+        let role = if is_server { Role::Server } else { Role::Client };
+        self.session.set_role(role);
+    }
+    
+    /// Get the current session state
+    #[wasm_bindgen]
+    pub fn get_state(&self) -> u8 {
+        match self.session.state() {
+            SessionState::New => 0,
+            SessionState::KeyExchangeInitiated => 1,
+            SessionState::KeyExchangeCompleted => 2,
+            SessionState::AuthenticationInitiated => 3,
+            SessionState::AuthenticationCompleted => 4,
+            SessionState::Established => 5,
+            SessionState::Closed => 6,
         }
     }
     
@@ -57,7 +78,7 @@ impl WasmPqcSession {
     pub fn process_key_exchange(&mut self, ciphertext: &Uint8Array) -> Result<(), JsValue> {
         let ct_bytes = ciphertext.to_vec();
         
-        match kyber768::Ciphertext::from_bytes(&ct_bytes) {
+        match pqcrypto_kyber::kyber768::Ciphertext::from_bytes(&ct_bytes) {
             Ok(ct) => {
                 match self.session.process_key_exchange(&ct) {
                     Ok(_) => Ok(()),
@@ -75,7 +96,7 @@ impl WasmPqcSession {
     pub fn accept_key_exchange(&mut self, public_key: &Uint8Array) -> Result<Uint8Array, JsValue> {
         let pk_bytes = public_key.to_vec();
         
-        match kyber768::PublicKey::from_bytes(&pk_bytes) {
+        match pqcrypto_kyber::kyber768::PublicKey::from_bytes(&pk_bytes) {
             Ok(pk) => {
                 match self.session.accept_key_exchange(&pk) {
                     Ok(ct) => {
@@ -105,7 +126,7 @@ impl WasmPqcSession {
     pub fn set_remote_verification_key(&mut self, key: &Uint8Array) -> Result<(), JsValue> {
         let vk_bytes = key.to_vec();
         
-        match dilithium3::PublicKey::from_bytes(&vk_bytes) {
+        match pqcrypto_dilithium::dilithium3::PublicKey::from_bytes(&vk_bytes) {
             Ok(vk) => {
                 match self.session.set_remote_verification_key(vk) {
                     Ok(_) => Ok(()),
@@ -197,7 +218,7 @@ impl WasmPqcStreamSender {
     #[wasm_bindgen(constructor)]
     pub fn new(chunk_size: Option<u32>) -> Self {
         Self {
-            chunk_size: chunk_size.unwrap_or(16384) as usize,
+            chunk_size: chunk_size.unwrap_or(MAX_CHUNK_SIZE as u32) as usize,
         }
     }
     
@@ -295,71 +316,121 @@ impl WasmPqcStreamReceiver {
             result
         })
     }
+    
+    /// Get the size of the reassembly buffer
+    #[wasm_bindgen]
+    pub fn get_reassembled_size(&self) -> u32 {
+        self.buffer.as_ref().map_or(0, |b| b.len()) as u32
+    }
+    
+    /// Clear the reassembly buffer without disabling reassembly
+    #[wasm_bindgen]
+    pub fn clear_buffer(&mut self) {
+        if let Some(ref mut buffer) = self.buffer {
+            buffer.clear();
+        }
+    }
 }
 
 // Export constants to JavaScript
 #[wasm_bindgen]
 pub fn get_kyber_public_key_bytes() -> u32 {
-    crate::types::sizes::KYBER_PUBLIC_KEY_BYTES as u32
+    sizes::kyber::PUBLIC_KEY_BYTES as u32
 }
 
 #[wasm_bindgen]
 pub fn get_kyber_ciphertext_bytes() -> u32 {
-    crate::types::sizes::KYBER_CIPHERTEXT_BYTES as u32
+    sizes::kyber::CIPHERTEXT_BYTES as u32
 }
 
 #[wasm_bindgen]
 pub fn get_dilithium_public_key_bytes() -> u32 {
-    crate::types::sizes::DILITHIUM_PUBLIC_KEY_BYTES as u32
+    sizes::dilithium::PUBLIC_KEY_BYTES as u32
 }
 
 #[wasm_bindgen]
 pub fn get_dilithium_signature_bytes() -> u32 {
-    crate::types::sizes::DILITHIUM_SIGNATURE_BYTES as u32
+    sizes::dilithium::SIGNATURE_BYTES as u32
 }
 
 #[wasm_bindgen]
 pub fn get_max_chunk_size() -> u32 {
-    crate::types::MAX_CHUNK_SIZE as u32
+    MAX_CHUNK_SIZE as u32
 }
 
 #[wasm_bindgen]
 pub fn get_header_size() -> u32 {
-    crate::types::sizes::HEADER_SIZE as u32
+    sizes::HEADER_SIZE as u32
 }
 
 #[wasm_bindgen]
 pub fn get_protocol_version() -> u8 {
-    crate::VERSION
+    VERSION
 }
 
 // Message type constants
 #[wasm_bindgen]
 pub fn get_message_type_key_exchange() -> u8 {
-    crate::types::MessageType::KeyExchange as u8
+    MessageType::KeyExchange.as_u8()
 }
 
 #[wasm_bindgen]
 pub fn get_message_type_signature() -> u8 {
-    crate::types::MessageType::Signature as u8
+    MessageType::Signature.as_u8()
 }
 
 #[wasm_bindgen]
 pub fn get_message_type_data() -> u8 {
-    crate::types::MessageType::Data as u8
+    MessageType::Data.as_u8()
 }
 
 #[wasm_bindgen]
 pub fn get_message_type_ack() -> u8 {
-    crate::types::MessageType::Ack as u8
+    MessageType::Ack.as_u8()
 }
 
 #[wasm_bindgen]
 pub fn get_message_type_close() -> u8 {
-    crate::types::MessageType::Close as u8
+    MessageType::Close.as_u8()
 }
 
 #[wasm_bindgen]
 pub fn get_message_type_error() -> u8 {
-    crate::types::MessageType::Error as u8
+    MessageType::Error.as_u8()
+}
+
+// Session state constants
+#[wasm_bindgen]
+pub fn get_session_state_new() -> u8 {
+    0 // SessionState::New
+}
+
+#[wasm_bindgen]
+pub fn get_session_state_key_exchange_initiated() -> u8 {
+    1 // SessionState::KeyExchangeInitiated
+}
+
+#[wasm_bindgen]
+pub fn get_session_state_key_exchange_completed() -> u8 {
+    2 // SessionState::KeyExchangeCompleted
+}
+
+#[wasm_bindgen]
+pub fn get_session_state_authentication_initiated() -> u8 {
+    3 // SessionState::AuthenticationInitiated
+}
+
+#[wasm_bindgen]
+pub fn get_session_state_authentication_completed() -> u8 {
+    4 // SessionState::AuthenticationCompleted
+}
+
+#[wasm_bindgen]
+pub fn get_session_state_established() -> u8 {
+    5 // SessionState::Established
+}
+
+#[wasm_bindgen]
+pub fn get_session_state_closed() -> u8 {
+    6 // SessionState::Closed
 }

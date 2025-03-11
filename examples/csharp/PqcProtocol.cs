@@ -1,3 +1,5 @@
+// TODO - Update to work with new project structure
+
 using System;
 using System.Runtime.InteropServices;
 

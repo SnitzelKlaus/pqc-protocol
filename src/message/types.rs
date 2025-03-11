@@ -1,13 +1,15 @@
 /*!
-Common types and constants used throughout the PQC protocol.
+Message types for the PQC protocol.
+
+This module defines the different types of messages that can be
+exchanged in the protocol.
 */
 
-/// Maximum chunk size for streaming data (16KB)
-pub const MAX_CHUNK_SIZE: usize = 16384;
+use std::fmt;
 
 /// Protocol message types
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MessageType {
     /// Key exchange message
     KeyExchange = 0x01,
@@ -38,14 +40,27 @@ impl MessageType {
     }
     
     /// Get the u8 value of this MessageType
-    pub fn as_u8(&self) -> u8 {
-        *self as u8
+    pub fn as_u8(self) -> u8 {
+        self as u8
+    }
+}
+
+impl fmt::Display for MessageType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MessageType::KeyExchange => write!(f, "KeyExchange"),
+            MessageType::Signature => write!(f, "Signature"),
+            MessageType::Data => write!(f, "Data"),
+            MessageType::Ack => write!(f, "Ack"),
+            MessageType::Close => write!(f, "Close"),
+            MessageType::Error => write!(f, "Error"),
+        }
     }
 }
 
 /// Protocol error codes
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ErrorCode {
     /// Protocol version mismatch
     VersionMismatch = 0x01,
@@ -76,44 +91,22 @@ impl ErrorCode {
     }
     
     /// Get the u8 value of this ErrorCode
-    pub fn as_u8(&self) -> u8 {
-        *self as u8
+    pub fn as_u8(self) -> u8 {
+        self as u8
     }
 }
 
-/// Size constants for the protocol
-pub mod sizes {
-    /// Size of the message header in bytes
-    pub const HEADER_SIZE: usize = 10;
-    
-    // CRYSTALS-Kyber (Kyber768) constants
-    /// Size of Kyber public key in bytes
-    pub const KYBER_PUBLIC_KEY_BYTES: usize = 1184;
-    
-    /// Size of Kyber secret key in bytes
-    pub const KYBER_SECRET_KEY_BYTES: usize = 2400;
-    
-    /// Size of Kyber ciphertext in bytes
-    pub const KYBER_CIPHERTEXT_BYTES: usize = 1088;
-    
-    /// Size of Kyber shared secret in bytes
-    pub const KYBER_SHARED_SECRET_BYTES: usize = 32;
-    
-    // CRYSTALS-Dilithium (dilithium3) constants
-    /// Size of Dilithium public key in bytes
-    pub const DILITHIUM_PUBLIC_KEY_BYTES: usize = 1952;
-    
-    /// Size of Dilithium secret key in bytes
-    pub const DILITHIUM_SECRET_KEY_BYTES: usize = 4016;
-    
-    /// Size of Dilithium signature in bytes
-    pub const DILITHIUM_SIGNATURE_BYTES: usize = 3293;
-    
-    /// Size of ChaCha20-Poly1305 authentication tag in bytes
-    pub const CHACHA_TAG_SIZE: usize = 16;
-    
-    /// Size of ChaCha20-Poly1305 nonce in bytes
-    pub const CHACHA_NONCE_SIZE: usize = 12;
+impl fmt::Display for ErrorCode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ErrorCode::VersionMismatch => write!(f, "VersionMismatch"),
+            ErrorCode::InvalidFormat => write!(f, "InvalidFormat"),
+            ErrorCode::AuthFailure => write!(f, "AuthFailure"),
+            ErrorCode::DecryptionFailure => write!(f, "DecryptionFailure"),
+            ErrorCode::SequenceMismatch => write!(f, "SequenceMismatch"),
+            ErrorCode::InternalError => write!(f, "InternalError"),
+        }
+    }
 }
 
 #[cfg(test)]

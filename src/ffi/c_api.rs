@@ -6,16 +6,15 @@ exposing the core functionality through a C API.
 */
 
 use crate::{
-    PqcSession,
+    session::PqcSession,
     error::Result,
-    types::sizes,
+    constants::sizes,
+    crypto::{
+        KyberPublicKey, KyberSecretKey, KyberCiphertext,
+        DilithiumPublicKey, DilithiumSecretKey, DilithiumSignature,
+    },
 };
-use pqcrypto_kyber::kyber768;
-use pqcrypto_dilithium::dilithium3;
-use pqcrypto_traits::{
-    kem::{PublicKey as KemPublicKey, SecretKey as KemSecretKey, Ciphertext as KemCiphertext},
-    sign::{PublicKey as SignPublicKey, SecretKey as SignSecretKey, DetachedSignature},
-};
+
 use std::{
     ffi::c_void,
     os::raw::{c_char, c_int, c_uint},
@@ -144,7 +143,7 @@ pub extern "C" fn pqc_process_key_exchange(
         return PqcErrorCode::InvalidArgument as c_int;
     }
     
-    if ciphertext_len as usize != sizes::KYBER_CIPHERTEXT_BYTES {
+    if ciphertext_len as usize != sizes::kyber::CIPHERTEXT_BYTES {
         return PqcErrorCode::InvalidArgument as c_int;
     }
     
@@ -152,7 +151,7 @@ pub extern "C" fn pqc_process_key_exchange(
     let ciphertext_bytes = unsafe { slice::from_raw_parts(ciphertext, ciphertext_len as usize) };
     
     // Convert bytes to KyberCiphertext
-    match kyber768::Ciphertext::from_bytes(ciphertext_bytes) {
+    match pqcrypto_kyber::kyber768::Ciphertext::from_bytes(ciphertext_bytes) {
         Ok(ct) => {
             // Process key exchange
             let (code, _) = to_error_code(session.process_key_exchange(&ct));
@@ -183,7 +182,7 @@ pub extern "C" fn pqc_accept_key_exchange(
         return PqcErrorCode::InvalidArgument as c_int;
     }
     
-    if public_key_len as usize != sizes::KYBER_PUBLIC_KEY_BYTES {
+    if public_key_len as usize != sizes::kyber::PUBLIC_KEY_BYTES {
         return PqcErrorCode::InvalidArgument as c_int;
     }
     
@@ -191,7 +190,7 @@ pub extern "C" fn pqc_accept_key_exchange(
     let pk_bytes = unsafe { slice::from_raw_parts(public_key, public_key_len as usize) };
     
     // Convert bytes to KyberPublicKey
-    match kyber768::PublicKey::from_bytes(pk_bytes) {
+    match pqcrypto_kyber::kyber768::PublicKey::from_bytes(pk_bytes) {
         Ok(pk) => {
             // Accept key exchange
             let (code, ciphertext) = to_error_code(session.accept_key_exchange(&pk));
@@ -339,7 +338,7 @@ pub extern "C" fn pqc_set_remote_verification_key(
         return PqcErrorCode::InvalidArgument as c_int;
     }
     
-    if key_len as usize != sizes::DILITHIUM_PUBLIC_KEY_BYTES {
+    if key_len as usize != sizes::dilithium::PUBLIC_KEY_BYTES {
         return PqcErrorCode::InvalidArgument as c_int;
     }
     
@@ -347,7 +346,7 @@ pub extern "C" fn pqc_set_remote_verification_key(
     let key_bytes = unsafe { slice::from_raw_parts(key, key_len as usize) };
     
     // Convert bytes to DilithiumPublicKey
-    match dilithium3::PublicKey::from_bytes(key_bytes) {
+    match pqcrypto_dilithium::dilithium3::PublicKey::from_bytes(key_bytes) {
         Ok(vk) => {
             // Set verification key
             let (code, _) = to_error_code(session.set_remote_verification_key(vk));

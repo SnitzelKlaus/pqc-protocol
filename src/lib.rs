@@ -5,6 +5,16 @@ A streaming protocol using NIST's post-quantum cryptography algorithms
 for secure communication across various platforms including C#, embedded systems,
 and web browsers.
 
+## Overview
+
+This library provides a post-quantum cryptography protocol implementation with:
+
+- CRYSTALS-Kyber for key exchange
+- CRYSTALS-Dilithium for digital signatures
+- ChaCha20-Poly1305 for symmetric encryption
+- Streaming support for large data transfers
+- Cross-platform compatibility
+
 ## Example
 
 ```rust
@@ -14,6 +24,7 @@ fn main() -> Result<()> {
     // Create client and server sessions
     let mut client_session = PqcSession::new()?;
     let mut server_session = PqcSession::new()?;
+    server_session.set_role(pqc_protocol::session::Role::Server);
     
     // Client initiates key exchange
     let client_public_key = client_session.init_key_exchange()?;
@@ -39,14 +50,45 @@ fn main() -> Result<()> {
     Ok(())
 }
 ```
+
+## High-Level API Example
+
+```rust
+use pqc_protocol::api::{PqcClient, PqcServer};
+
+// Client side
+let mut client = PqcClient::new()?;
+let client_pk = client.connect()?;
+
+// Server side
+let mut server = PqcServer::new()?;
+let (server_ct, server_vk) = server.accept(&client_pk)?;
+
+// Client continues
+let client_vk = client.process_response(&server_ct)?;
+client.authenticate(&server_vk)?;
+
+// Server continues
+server.authenticate(&client_vk)?;
+
+// Secure communication
+let encrypted = client.send(b"Hello!")?;
+let decrypted = server.receive(&encrypted)?;
+```
 */
 
-// Re-export modules
+// Public modules
+pub mod constants;
 pub mod error;
-pub mod header;
+pub mod message;
+pub mod crypto;
 pub mod session;
 pub mod streaming;
-pub mod types;
+pub mod api;
+
+// Optional serde support
+#[cfg(feature = "serde-support")]
+pub mod serde;
 
 // Conditionally compile FFI module if the feature is enabled
 #[cfg(feature = "ffi")]
@@ -56,12 +98,12 @@ pub mod ffi;
 #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 pub mod wasm;
 
-// Re-export main types for convenience
+// Re-export commonly used types for convenience
 pub use error::{Error, Result};
-pub use header::MessageHeader;
-pub use session::PqcSession;
-pub use streaming::PqcStreamSender;
-pub use types::MessageType;
+pub use message::{MessageType, MessageHeader};
+pub use session::{PqcSession, SessionState, Role};
+pub use streaming::{PqcStreamSender, PqcStreamReceiver};
 
+// Export protocol version
 /// The current version of the protocol
-pub const VERSION: u8 = 1;
+pub use constants::VERSION;

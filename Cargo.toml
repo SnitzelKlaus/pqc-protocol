@@ -20,7 +20,9 @@ hkdf = "0.12.4"
 # Serialization and buffers
 bytes = "1.10.1"
 byteorder = "1.5.0"
-serde = { version = "1.0.219", features = ["derive"], optional = true }
+serde = { version = "1.0.219", features = ["derive"], optional = true}
+serde_json = { version = "1.0.140", optional = true }
+bincode = { version = "2.0.1", optional = true }
 
 # Error handling
 thiserror = "2.0.12"
@@ -29,7 +31,7 @@ thiserror = "2.0.12"
 tokio = { version = "1.44.0", features = ["full"], optional = true }
 
 # FFI
-libc = { version = "0.2.170", optional = true }
+libc = { version = "0.2.171", optional = true }
 
 # WASM support
 wasm-bindgen = { version = "0.2.100", optional = true }
@@ -42,11 +44,15 @@ wasm-bindgen = "0.2.100"
 js-sys = "0.3.77"
 web-sys = { version = "0.3.77", features = ["console"] }
 
+[dev-dependencies]
+proptest = "1.6.0"
+criterion = "0.5.1"
+
 [features]
 default = ["std"]
 std = []
 async = ["tokio"]
-serde-support = ["serde"]
+serde-support = ["dep:serde", "dep:serde_json", "dep:bincode"]
 ffi = ["libc"]
 wasm = [
     "wasm-bindgen", 
@@ -60,12 +66,22 @@ crate-type = ["cdylib", "rlib"]
 
 [[example]]
 name = "client"
-path = "src/examples/client.rs"
+path = "examples/client.rs"
 required-features = ["std"]
 
 [[example]]
 name = "server"
-path = "src/examples/server.rs"
+path = "examples/server.rs"
+required-features = ["std"]
+
+[[example]]
+name = "simple_chat"
+path = "examples/simple_chat.rs"
+required-features = ["std"]
+
+[[example]]
+name = "file_transfer"
+path = "examples/file_transfer.rs"
 required-features = ["std"]
 
 [profile.release]
