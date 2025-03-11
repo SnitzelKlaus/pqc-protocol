@@ -1,4 +1,3 @@
-```
 # 🚀 Post-Quantum Cryptography Streaming Protocol
 
 A high-performance streaming protocol leveraging **NIST-standardized post-quantum cryptography** (PQC) for **secure** and **future-proof** communication across **Rust, C#, embedded systems, and web browsers**.
@@ -24,7 +23,7 @@ This protocol ensures **quantum-resistant encryption** for secure communication 
 
 ## Project Structure  
 
-```
+```toml
 QStream/
 ├── Cargo.toml             # Rust package configuration
 ├── README.md              # This file
@@ -76,4 +75,3 @@ pqc-protocol = "0.1.0"
 ---
 
 **License:** MIT
-```
