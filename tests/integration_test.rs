@@ -3,7 +3,7 @@ use pqc_protocol::{
     PqcSession,
     PqcStreamSender,
     Result,
-    Error,
+    // Remove unused Error import
 };
 
 use pqcrypto_kyber::kyber768;
@@ -119,13 +119,17 @@ fn test_invalid_signature() -> Result<()> {
 fn test_protocol_sequence_errors() {
     // Test: Can't process key exchange without initiating
     let mut client = PqcSession::new().unwrap();
-    let (_, dummy_ciphertext) = kyber768::keypair();
-    let result = client.process_key_exchange(&dummy_ciphertext);
+    
+    // Create a valid Kyber ciphertext for testing
+    let (pk, _) = kyber768::keypair();
+    let (_, ciphertext) = kyber768::encapsulate(&pk);
+    
+    let result = client.process_key_exchange(&ciphertext);
     assert!(result.is_err());
     
     // Test: Can't set verification key before key exchange
     let mut client = PqcSession::new().unwrap();
-    let (_, dummy_vk) = dilithium3::keypair();
+    let (dummy_vk, _) = dilithium3::keypair();
     let result = client.set_remote_verification_key(dummy_vk);
     assert!(result.is_err());
     

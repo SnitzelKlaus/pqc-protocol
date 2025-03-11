@@ -214,8 +214,10 @@ impl PqcSession {
         // Store remote public key
         self.remote_public_key = Some(client_public_key.clone());
         
-        // Encapsulate to generate shared secret and ciphertext
-        let (ciphertext, shared_secret) = kyber768::encapsulate(client_public_key);
+        // IMPORTANT CHANGE: Reverse the order of destructuring
+        // Based on the error message, kyber768::encapsulate returns
+        // (shared_secret, ciphertext) rather than (ciphertext, shared_secret)
+        let (shared_secret, ciphertext) = kyber768::encapsulate(client_public_key);
         
         // Get shared secret bytes
         let shared_secret_bytes = shared_secret.as_bytes();
@@ -457,19 +459,19 @@ impl PqcSession {
     
     /// Create a nonce from sequence number and message type
     fn create_nonce(&self, seq_num: u32, msg_type: MessageType) -> Nonce {
-        let mut nonce = [0u8; 12];
-        
-        // First 4 bytes: sequence number
-        nonce[0..4].copy_from_slice(&seq_num.to_be_bytes());
-        
-        // 5th byte: message type
-        nonce[4] = msg_type.as_u8();
-        
-        // Last 7 bytes: random data
-        let mut rng = rand::thread_rng();  // TODO update
-        rng.fill_bytes(&mut nonce[5..]);
-        
-        *GenericArray::from_slice(&nonce)
+    let mut nonce = [0u8; 12];
+    
+    // First 4 bytes: sequence number
+    nonce[0..4].copy_from_slice(&seq_num.to_be_bytes());
+    
+    // 5th byte: message type
+    nonce[4] = msg_type.as_u8();
+    
+    // Last 7 bytes: random data
+    let mut rng = rand::rng();
+    rng.fill_bytes(&mut nonce[5..]);
+    
+    *GenericArray::from_slice(&nonce)
     }
     
     /// Derive encryption key from shared secret using HKDF
