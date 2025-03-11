@@ -23,7 +23,7 @@ This protocol ensures **quantum-resistant encryption** for secure communication 
 
 ## Project Structure  
 
-```toml
+```
 QStream/
 ├── Cargo.toml             # Rust package configuration
 ├── README.md              # This file
