@@ -8,7 +8,7 @@ use pqc_protocol::{
 use std::time::Instant;
 use rand::{rng, Rng};
 use pqcrypto_kyber::kyber768;
-use pqcrypto_traits::kem::{PublicKey as KemPublicKey, Ciphertext as KemCiphertext};
+use pqcrypto_traits::kem::PublicKey as KemPublicKey;
 
 // Test successful key exchange between client and server
 #[test]
@@ -41,7 +41,7 @@ fn test_key_exchange_corruption() -> Result<()> {
     let mut server = PqcSession::new()?;
     
     // Client initiates key exchange
-    let client_public_key = client.init_key_exchange()?;
+    let _client_public_key = client.init_key_exchange()?;
     
     // Generate a different, unrelated public key
     let (different_pk, _) = kyber768::keypair();
@@ -184,16 +184,16 @@ fn test_malformed_inputs() -> Result<()> {
     // Try to create a public key from corrupted bytes
     match kyber768::PublicKey::from_bytes(&corrupted_bytes) {
         Ok(corrupt_pk) => {
-            // If creation succeeded (unlikely), attempt key exchange
-            let result = server.accept_key_exchange(&corrupt_pk);
-            
-            // The operation might succeed but would lead to different shared secrets
-            if result.is_ok() {
+            // Attempt key exchange with corrupted key
+            if let Ok(_result) = server.accept_key_exchange(&corrupt_pk) {
                 println!("Warning: Created public key from corrupted bytes");
             }
+            // Because calling accept_key_exchange even with a bad key has advanced the session state,
+            // reset the server session for a valid key exchange.
+            server = PqcSession::new()?;
         },
         Err(_) => {
-            // Expected - corrupted key bytes should be rejected
+            // Expected: corrupted key creation fails.
         }
     }
     

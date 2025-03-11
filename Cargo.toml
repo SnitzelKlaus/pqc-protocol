@@ -60,12 +60,12 @@ crate-type = ["cdylib", "rlib"]
 
 [[example]]
 name = "client"
-path = "examples/client.rs"
+path = "src/examples/client.rs"
 required-features = ["std"]
 
 [[example]]
 name = "server"
-path = "examples/server.rs"
+path = "src/examples/server.rs"
 required-features = ["std"]
 
 [profile.release]

@@ -1,6 +1,8 @@
 use pqc_protocol::{PqcSession, PqcStreamSender, Result};
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
+use pqcrypto_traits::kem::{PublicKey, Ciphertext};
+use pqcrypto_traits::sign::PublicKey as SignPublicKey;
 
 fn main() -> Result<()> {
     println!("PQC Protocol Client Example");

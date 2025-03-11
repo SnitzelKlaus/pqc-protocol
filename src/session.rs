@@ -28,11 +28,10 @@ use pqcrypto_dilithium::{
 
 // Import trait methods to use as_bytes, from_bytes, etc.
 use pqcrypto_traits::{
-    kem::{SharedSecret, Ciphertext},
+    kem::SharedSecret,
     sign::DetachedSignature,
 };
 
-use rand::prelude::*;  // Import all random generator traits
 use chacha20poly1305::{
     ChaCha20Poly1305, Key, Nonce,
     aead::{Aead, KeyInit, generic_array::GenericArray},
@@ -459,19 +458,20 @@ impl PqcSession {
     
     /// Create a nonce from sequence number and message type
     fn create_nonce(&self, seq_num: u32, msg_type: MessageType) -> Nonce {
-    let mut nonce = [0u8; 12];
-    
-    // First 4 bytes: sequence number
-    nonce[0..4].copy_from_slice(&seq_num.to_be_bytes());
-    
-    // 5th byte: message type
-    nonce[4] = msg_type.as_u8();
-    
-    // Last 7 bytes: random data
-    let mut rng = rand::rng();
-    rng.fill_bytes(&mut nonce[5..]);
-    
-    *GenericArray::from_slice(&nonce)
+        let mut nonce = [0u8; 12];
+        
+        // First 4 bytes: sequence number
+        nonce[0..4].copy_from_slice(&seq_num.to_be_bytes());
+        
+        // 5th byte: message type
+        nonce[4] = msg_type.as_u8();
+        
+        // Last 7 bytes: fixed data (all zeros)
+        for byte in &mut nonce[5..] {
+            *byte = 0;
+        }
+        
+        *GenericArray::from_slice(&nonce)
     }
     
     /// Derive encryption key from shared secret using HKDF

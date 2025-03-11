@@ -2,6 +2,8 @@ use pqc_protocol::{PqcSession, Result};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::thread;
+use pqcrypto_traits::kem::{PublicKey, Ciphertext};
+use pqcrypto_traits::sign::PublicKey as SignPublicKey;
 
 fn handle_client(mut stream: TcpStream) -> Result<()> {
     println!("New client connected: {}", stream.peer_addr()?);

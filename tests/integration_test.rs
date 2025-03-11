@@ -8,10 +8,6 @@ use pqc_protocol::{
 
 use pqcrypto_kyber::kyber768;
 use pqcrypto_dilithium::dilithium3;
-use pqcrypto_traits::{
-    kem::{PublicKey as KemPublicKey, SecretKey as KemSecretKey, Ciphertext as KemCiphertext},
-    sign::{PublicKey as SignPublicKey, SecretKey as SignSecretKey, DetachedSignature},
-};
 
 // Test full protocol flow from key exchange to encrypted communication
 #[test]
