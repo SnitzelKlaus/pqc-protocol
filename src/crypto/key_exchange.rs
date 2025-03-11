@@ -7,7 +7,7 @@ of the protocol using Kyber.
 
 use crate::{
     constants::{sizes, HKDF_SALT, HKDF_INFO_CHACHA},
-    error::{Result, Error},
+    error::{Result, Error, CryptoError},
 };
 
 use pqcrypto_kyber::{
@@ -48,7 +48,7 @@ impl KeyExchange {
         let hkdf = Hkdf::<Sha256>::new(Some(HKDF_SALT), shared_secret);
         
         hkdf.expand(HKDF_INFO_CHACHA, &mut okm)
-            .map_err(|e| Error::Crypto(format!("HKDF key derivation failed: {}", e)))?;
+            .map_err(|_e| Error::Crypto(CryptoError::KeyDerivationFailed))?;
         
         Ok(okm)
     }

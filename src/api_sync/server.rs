@@ -1,114 +1,20 @@
 /*!
-High-level API for the PQC protocol.
+Synchronous server implementation for the PQC protocol.
 
-This module provides a simplified API for common protocol operations,
-hiding implementation details and providing a more user-friendly interface.
+This module provides the server-side operations for the synchronous API.
 */
 
 use crate::{
     error::{Result, Error},
     session::{PqcSession, Role, SessionState},
     streaming::{PqcStreamSender, PqcStreamReceiver},
+    security::rotation::PqcSessionKeyRotation,
+    constants::MAX_CHUNK_SIZE,
 };
 
 // Required traits for from_bytes/as_bytes methods
 use pqcrypto_traits::kem::{PublicKey as KemPublicKey, Ciphertext as KemCiphertext};
 use pqcrypto_traits::sign::PublicKey as SignPublicKey;
-
-/// Client-side operations for the PQC protocol
-pub struct PqcClient {
-    /// The underlying session
-    session: PqcSession,
-}
-
-impl PqcClient {
-    /// Create a new PQC client
-    pub fn new() -> Result<Self> {
-        let mut session = PqcSession::new()?;
-        session.set_role(Role::Client);
-        Ok(Self { session })
-    }
-    
-    /// Start the connection process
-    ///
-    /// Initiates key exchange and returns the public key to send to the server.
-    pub fn connect(&mut self) -> Result<Vec<u8>> {
-        let public_key = self.session.init_key_exchange()?;
-        Ok(public_key.as_bytes().to_vec())
-    }
-    
-    /// Process the server's response to complete the connection
-    ///
-    /// Takes the ciphertext from the server and returns the verification key to send.
-    pub fn process_response(&mut self, ciphertext: &[u8]) -> Result<Vec<u8>> {
-        // Convert bytes to Kyber ciphertext
-        let ct = pqcrypto_kyber::kyber768::Ciphertext::from_bytes(ciphertext)
-            .map_err(|_| Error::Crypto("Invalid ciphertext format".into()))?;
-        
-        // Process the ciphertext
-        self.session.process_key_exchange(&ct)?;
-        
-        // Return the verification key
-        Ok(self.session.local_verification_key().as_bytes().to_vec())
-    }
-    
-    /// Complete authentication with the server's verification key
-    ///
-    /// Takes the server's verification key and completes the connection.
-    pub fn authenticate(&mut self, server_verification_key: &[u8]) -> Result<()> {
-        // Convert bytes to Dilithium verification key
-        let vk = pqcrypto_dilithium::dilithium3::PublicKey::from_bytes(server_verification_key)
-            .map_err(|_| Error::Authentication("Invalid verification key format".into()))?;
-        
-        // Set the remote verification key
-        self.session.set_remote_verification_key(vk)?;
-        
-        // Complete authentication
-        self.session.complete_authentication()?;
-        
-        Ok(())
-    }
-    
-    /// Send a message to the server
-    pub fn send(&mut self, data: &[u8]) -> Result<Vec<u8>> {
-        self.session.encrypt_and_sign(data)
-    }
-    
-    /// Receive a message from the server
-    pub fn receive(&mut self, encrypted: &[u8]) -> Result<Vec<u8>> {
-        self.session.verify_and_decrypt(encrypted)
-    }
-    
-    /// Close the connection
-    pub fn close(&mut self) -> Vec<u8> {
-        self.session.close()
-    }
-    
-    /// Stream data to the server lazily without materializing all chunks at once.
-    pub fn stream<'a>(&'a mut self, data: &'a [u8], chunk_size: Option<usize>) -> impl Iterator<Item = Result<Vec<u8>>> + 'a {
-        PqcStreamSender::new(&mut self.session, chunk_size).stream_data(data)
-    }
-
-    /// Create a stream receiver to reassemble chunked data
-    pub fn create_receiver(&mut self) -> PqcStreamReceiver {
-        PqcStreamReceiver::with_reassembly(&mut self.session)
-    }
-    
-    /// Get the current connection state
-    pub fn state(&self) -> SessionState {
-        self.session.state()
-    }
-    
-    /// Get a reference to the underlying session
-    pub fn session(&self) -> &PqcSession {
-        &self.session
-    }
-    
-    /// Get a mutable reference to the underlying session
-    pub fn session_mut(&mut self) -> &mut PqcSession {
-        &mut self.session
-    }
-}
 
 /// Server-side operations for the PQC protocol
 pub struct PqcServer {
@@ -130,7 +36,9 @@ impl PqcServer {
     pub fn accept(&mut self, client_public_key: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
         // Convert bytes to Kyber public key
         let pk = pqcrypto_kyber::kyber768::PublicKey::from_bytes(client_public_key)
-            .map_err(|_| Error::Crypto("Invalid public key format".into()))?;
+            .map_err(|_| {
+                crate::key_exchange_err!(crate::error::KeyExchangeError::InvalidPublicKey)
+            })?;
         
         // Accept the key exchange
         let ciphertext = self.session.accept_key_exchange(&pk)?;
@@ -148,7 +56,9 @@ impl PqcServer {
     pub fn authenticate(&mut self, client_verification_key: &[u8]) -> Result<()> {
         // Convert bytes to Dilithium verification key
         let vk = pqcrypto_dilithium::dilithium3::PublicKey::from_bytes(client_verification_key)
-            .map_err(|_| Error::Authentication("Invalid verification key format".into()))?;
+            .map_err(|_| {
+                crate::auth_err!(crate::error::AuthError::InvalidKeyFormat)
+            })?;
         
         // Set the remote verification key
         self.session.set_remote_verification_key(vk)?;
@@ -161,12 +71,26 @@ impl PqcServer {
     
     /// Send a message to the client
     pub fn send(&mut self, data: &[u8]) -> Result<Vec<u8>> {
-        self.session.encrypt_and_sign(data)
+        let result = self.session.encrypt_and_sign(data)?;
+        
+        // Track sent data for key rotation if enabled
+        if self.session.should_rotate_keys() {
+            self.session.track_sent(result.len());
+        }
+        
+        Ok(result)
     }
     
     /// Receive a message from the client
     pub fn receive(&mut self, encrypted: &[u8]) -> Result<Vec<u8>> {
-        self.session.verify_and_decrypt(encrypted)
+        let result = self.session.verify_and_decrypt(encrypted)?;
+        
+        // Track received data for key rotation if enabled
+        if self.session.should_rotate_keys() {
+            self.session.track_received(encrypted.len());
+        }
+        
+        Ok(result)
     }
     
     /// Close the connection
@@ -174,14 +98,40 @@ impl PqcServer {
         self.session.close()
     }
     
-    /// Stream data to the client lazily.
+    /// Stream data to the client lazily
     pub fn stream<'a>(&'a mut self, data: &'a [u8], chunk_size: Option<usize>) -> impl Iterator<Item = Result<Vec<u8>>> + 'a {
-        PqcStreamSender::new(&mut self.session, chunk_size).stream_data(data)
+        let chunk_size = chunk_size.unwrap_or(MAX_CHUNK_SIZE);
+        PqcStreamSender::new(&mut self.session, Some(chunk_size)).stream_data(data)
     }
     
     /// Create a stream receiver to reassemble chunked data
     pub fn create_receiver(&mut self) -> PqcStreamReceiver {
         PqcStreamReceiver::with_reassembly(&mut self.session)
+    }
+    
+    /// Check if key rotation is needed and initiate if necessary
+    ///
+    /// Returns a rotation message to send if rotation is needed,
+    /// or None if no rotation is needed.
+    pub fn check_rotation(&mut self) -> Result<Option<Vec<u8>>> {
+        if self.session.should_rotate_keys() {
+            let rotation_msg = self.session.initiate_key_rotation()?;
+            Ok(Some(rotation_msg))
+        } else {
+            Ok(None)
+        }
+    }
+    
+    /// Process a key rotation message from the client
+    ///
+    /// Returns a response message to send back to the client.
+    pub fn process_rotation(&mut self, rotation_msg: &[u8]) -> Result<Vec<u8>> {
+        self.session.process_key_rotation(rotation_msg)
+    }
+    
+    /// Complete key rotation based on the client's response
+    pub fn complete_rotation(&mut self, response: &[u8]) -> Result<()> {
+        self.session.complete_key_rotation(response)
     }
     
     /// Get the current connection state
@@ -207,7 +157,7 @@ mod tests {
     #[test]
     fn test_client_server_interaction() -> Result<()> {
         // Create client and server
-        let mut client = PqcClient::new()?;
+        let mut client = crate::api_sync::PqcClient::new()?;
         let mut server = PqcServer::new()?;
         
         // Client connects and gets public key

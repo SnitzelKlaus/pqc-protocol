@@ -6,14 +6,15 @@ using Dilithium.
 */
 
 use crate::error::{Result, Error};
+use crate::error::AuthError;
 
 use pqcrypto_dilithium::{
     dilithium3,
     dilithium3::{
         PublicKey as DilithiumPublicKey,
         SecretKey as DilithiumSecretKey,
-        DetachedSignature as DilithiumSignature
-    }
+        DetachedSignature as DilithiumSignature,
+    },
 };
 
 use pqcrypto_traits::sign::DetachedSignature;
@@ -33,10 +34,14 @@ impl Authentication {
     }
     
     /// Verify a signature using a Dilithium verification key
-    pub fn verify(data: &[u8], signature: &DilithiumSignature, public_key: &DilithiumPublicKey) -> Result<()> {
+    pub fn verify(
+        data: &[u8],
+        signature: &DilithiumSignature,
+        public_key: &DilithiumPublicKey,
+    ) -> Result<()> {
         match dilithium3::verify_detached_signature(signature, data, public_key) {
             Ok(_) => Ok(()),
-            Err(_) => Err(Error::Authentication("Signature verification failed".into())),
+            Err(_) => Err(Error::Authentication(AuthError::SignatureVerificationFailed)),
         }
     }
     
@@ -49,7 +54,7 @@ impl Authentication {
     pub fn signature_from_bytes(bytes: &[u8]) -> Result<DilithiumSignature> {
         match DilithiumSignature::from_bytes(bytes) {
             Ok(sig) => Ok(sig),
-            Err(_) => Err(Error::Authentication("Invalid signature format".into())),
+            Err(_) => Err(Error::Authentication(AuthError::InvalidKeyFormat)),
         }
     }
 }

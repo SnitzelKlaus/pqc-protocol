@@ -7,9 +7,12 @@ including serialization and deserialization.
 
 use crate::{
     constants::{VERSION, sizes},
-    error::{Error, Result, format_err},
+    error::{Error, Result},
     message::types::MessageType,
 };
+// Import the protocol_err macro so that error messages can be created.
+use crate::protocol_err;
+
 use byteorder::{BigEndian, ByteOrder};
 use std::io::{self, Read, Write};
 
@@ -56,7 +59,7 @@ impl MessageHeader {
     /// Parse a header from bytes
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         if bytes.len() < sizes::HEADER_SIZE {
-            return format_err("Header too short");
+            return protocol_err!("Header too short");
         }
 
         let version = bytes[0];
@@ -66,7 +69,7 @@ impl MessageHeader {
 
         let msg_type = match MessageType::from_u8(bytes[1]) {
             Some(t) => t,
-            None => return format_err(format!("Invalid message type: {}", bytes[1])),
+            None => return protocol_err!("Invalid message type: {}", bytes[1]),
         };
 
         let seq_num = BigEndian::read_u32(&bytes[2..6]);
@@ -149,19 +152,16 @@ impl<'a> MessageParser<'a> {
     /// Parse a message from bytes
     pub fn new(data: &'a [u8]) -> Result<Self> {
         if data.len() < sizes::HEADER_SIZE {
-            return format_err("Message too short for header");
+            return protocol_err!("Message too short for header");
         }
         
         let header = MessageHeader::from_bytes(&data[..sizes::HEADER_SIZE])?;
         
         if data.len() < sizes::HEADER_SIZE + header.payload_len as usize {
-            return format_err("Message too short for payload");
+            return protocol_err!("Message too short for payload");
         }
         
-        Ok(Self {
-            data,
-            header,
-        })
+        Ok(Self { data, header })
     }
     
     /// Get the header
@@ -174,7 +174,7 @@ impl<'a> MessageParser<'a> {
         let payload_end = sizes::HEADER_SIZE + self.header.payload_len as usize;
         
         if self.header.payload_len as usize <= signature_len {
-            return format_err("Payload too small to contain signature");
+            return protocol_err!("Payload too small to contain signature");
         }
         
         let data_end = payload_end - signature_len;
@@ -186,7 +186,7 @@ impl<'a> MessageParser<'a> {
         let payload_end = sizes::HEADER_SIZE + self.header.payload_len as usize;
         
         if self.header.payload_len as usize <= signature_len {
-            return format_err("Payload too small to contain signature");
+            return protocol_err!("Payload too small to contain signature");
         }
         
         let data_end = payload_end - signature_len;

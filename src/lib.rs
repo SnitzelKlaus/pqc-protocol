@@ -14,67 +14,119 @@ This library provides a post-quantum cryptography protocol implementation with:
 - ChaCha20-Poly1305 for symmetric encryption
 - Streaming support for large data transfers
 - Cross-platform compatibility
+- Both synchronous and asynchronous APIs
 
-## Example
+## Example (Synchronous API)
 
 ```rust
-use pqc_protocol::{PqcSession, Result};
+use pqc_protocol::sync::{PqcClient, PqcServer};
+use pqc_protocol::error::Result;
 
 fn main() -> Result<()> {
     // Create client and server sessions
-    let mut client_session = PqcSession::new()?;
-    let mut server_session = PqcSession::new()?;
-    server_session.set_role(pqc_protocol::session::Role::Server);
+    let mut client = PqcClient::new()?;
+    let mut server = PqcServer::new()?;
     
     // Client initiates key exchange
-    let client_public_key = client_session.init_key_exchange()?;
+    let client_public_key = client.connect()?;
     
     // Server accepts key exchange
-    let ciphertext = server_session.accept_key_exchange(&client_public_key)?;
+    let (server_ct, server_vk) = server.accept(&client_public_key)?;
     
     // Client processes response to complete key exchange
-    client_session.process_key_exchange(&ciphertext)?;
+    let client_vk = client.process_response(&server_ct)?;
     
-    // Exchange verification keys and complete authentication.
-    client_session.set_remote_verification_key(server_session.local_verification_key().clone())?;
-    server_session.set_remote_verification_key(client_session.local_verification_key().clone())?;
-    client_session.complete_authentication()?;
-    server_session.complete_authentication()?;
+    // Exchange verification keys and complete authentication
+    server.authenticate(&client_vk)?;
+    client.authenticate(&server_vk)?;
     
-    // Now both sessions are fully established.
+    // Now both sessions are fully established
     let message = b"Hello, post-quantum world!";
-    let encrypted = client_session.encrypt_and_sign(message)?;
-    let decrypted = server_session.verify_and_decrypt(&encrypted)?;
+    let encrypted = client.send(message)?;
+    let decrypted = server.receive(&encrypted)?;
     
     assert_eq!(message, &decrypted[..]);
     Ok(())
 }
 ```
 
-## High-Level API Example
+## Example (Asynchronous API)
 
 ```rust
-use pqc_protocol::api::{PqcClient, PqcServer};
+use pqc_protocol::async::{AsyncPqcClient, AsyncPqcServer};
+use pqc_protocol::error::Result;
 
-// Client side
-let mut client = PqcClient::new()?;
-let client_pk = client.connect()?;
-
-// Server side
-let mut server = PqcServer::new()?;
-let (server_ct, server_vk) = server.accept(&client_pk)?;
-
-// Client continues
-let client_vk = client.process_response(&server_ct)?;
-client.authenticate(&server_vk)?;
-
-// Server continues
-server.authenticate(&client_vk)?;
-
-// Secure communication
-let encrypted = client.send(b"Hello!")?;
-let decrypted = server.receive(&encrypted)?;
+#[tokio::main]
+async fn main() -> Result<()> {
+    // Create client and server sessions
+    let client = AsyncPqcClient::new().await?;
+    let server = AsyncPqcServer::new().await?;
+    
+    // Client initiates key exchange
+    let client_pk = client.connect().await?;
+    
+    // Server accepts key exchange
+    let (server_ct, server_vk) = server.accept(&client_pk).await?;
+    
+    // Client processes server response
+    let client_vk = client.process_response(&server_ct).await?;
+    
+    // Authentication
+    server.authenticate(&client_vk).await?;
+    client.authenticate(&server_vk).await?;
+    
+    // Secure communication
+    let message = b"Hello, async post-quantum world!";
+    let encrypted = client.send(message).await?;
+    let decrypted = server.receive(&encrypted).await?;
+    
+    assert_eq!(message, &decrypted[..]);
+    Ok(())
+}
 ```
+
+## Streaming Example
+
+```rust
+use pqc_protocol::sync::{PqcClient, PqcServer};
+use pqc_protocol::error::Result;
+
+fn stream_large_data() -> Result<()> {
+    // Set up secure connection (omitted for brevity)
+    let mut client = PqcClient::new()?;
+    let mut server = PqcServer::new()?;
+    
+    // ... establish connection ...
+    
+    // Stream large data
+    let large_data = vec![0u8; 10 * 1024 * 1024]; // 10MB
+    
+    // Client streams data in chunks
+    let sender = client.stream(large_data.as_slice(), Some(1024 * 1024));
+    
+    // Server receives and reassembles
+    let mut receiver = server.create_receiver();
+    
+    for encrypted_chunk in sender {
+        let encrypted = encrypted_chunk?;
+        receiver.process_chunk(&encrypted)?;
+    }
+    
+    // Get reassembled data
+    let received_data = receiver.take_reassembled_data().unwrap();
+    assert_eq!(received_data.len(), large_data.len());
+    
+    Ok(())
+}
+```
+
+## Features
+
+- `std` (default): Standard library support
+- `async`: Async support with Tokio
+- `serde-support`: Serialization support with serde
+- `ffi`: Foreign Function Interface for C/C++/C#
+- `wasm`: WebAssembly support
 */
 
 // Public modules
@@ -84,7 +136,13 @@ pub mod message;
 pub mod crypto;
 pub mod session;
 pub mod streaming;
-pub mod api;
+pub mod memory;
+pub mod security;
+pub mod api_sync;
+
+// Optional async support
+#[cfg(feature = "async")]
+pub mod api_async;
 
 // Optional serde support
 #[cfg(feature = "serde-support")]

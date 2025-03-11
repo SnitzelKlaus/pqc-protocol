@@ -7,7 +7,7 @@ using ChaCha20-Poly1305.
 
 use crate::{
     constants::sizes,
-    error::{Result, Error},
+    error::{Result, Error, CryptoError},
     message::types::MessageType,
 };
 
@@ -33,13 +33,13 @@ impl Cipher {
     /// Encrypt data using the cipher
     pub fn encrypt(&self, nonce: &Nonce, data: &[u8]) -> Result<Vec<u8>> {
         self.cipher.encrypt(nonce, data)
-            .map_err(|e| Error::Crypto(format!("Encryption failed: {}", e)))
+            .map_err(|_e| Error::Crypto(CryptoError::EncryptionFailed))
     }
     
     /// Decrypt data using the cipher
     pub fn decrypt(&self, nonce: &Nonce, data: &[u8]) -> Result<Vec<u8>> {
         self.cipher.decrypt(nonce, data)
-            .map_err(|e| Error::Crypto(format!("Decryption failed: {}", e)))
+            .map_err(|_e| Error::Crypto(CryptoError::DecryptionFailed))
     }
     
     /// Create a nonce from sequence number and message type
