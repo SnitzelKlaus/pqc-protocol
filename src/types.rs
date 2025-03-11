@@ -2,8 +2,6 @@
 Common types and constants used throughout the PQC protocol.
 */
 
-use crate::VERSION;
-
 /// Maximum chunk size for streaming data (16KB)
 pub const MAX_CHUNK_SIZE: usize = 16384;
 

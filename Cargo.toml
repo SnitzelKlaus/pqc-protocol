@@ -1,5 +1,5 @@
 [package]
-name = "QStream"
+name = "pqc-protocol"
 version = "0.1.0"
 edition = "2024"
 authors = ["snitzelklaus@gmail.com"]
@@ -29,23 +29,31 @@ thiserror = "2.0.12"
 tokio = { version = "1.44.0", features = ["full"], optional = true }
 
 # FFI
-libc = "0.2.170"
+libc = { version = "0.2.170", optional = true }
 
 # WASM support
+wasm-bindgen = { version = "0.2.100", optional = true }
+js-sys = { version = "0.3.77", optional = true }
+web-sys = { version = "0.3.77", features = ["console"], optional = true }
+console_error_panic_hook = { version = "0.1.7", optional = true }
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2.100"
 js-sys = "0.3.77"
-web-sys = { version = "0.3.77", features = [
-  "console"
-]}
+web-sys = { version = "0.3.77", features = ["console"] }
 
 [features]
 default = ["std"]
 std = []
 async = ["tokio"]
 serde-support = ["serde"]
-ffi = []
-wasm = ["wasm-bindgen", "js-sys", "web-sys"]
+ffi = ["libc"]
+wasm = [
+    "wasm-bindgen", 
+    "js-sys", 
+    "web-sys", 
+    "console_error_panic_hook"
+]
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -61,3 +69,6 @@ path = "examples/server.rs"
 required-features = ["std"]
 
 [profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3

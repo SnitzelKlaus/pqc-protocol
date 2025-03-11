@@ -3,7 +3,7 @@ Core session implementation for the PQC protocol.
 */
 
 use crate::{
-    error::{Error, Result, auth_err, crypto_err, internal_err, key_exchange_err},
+    error::{Error, Result, auth_err, crypto_err, key_exchange_err},
     header::MessageHeader,
     types::{MessageType, sizes},
 };
@@ -13,7 +13,7 @@ use pqcrypto_kyber::{
     kyber768::{
         PublicKey as KyberPublicKey,
         SecretKey as KyberSecretKey,
-        Ciphertext as KyberCiphertext
+        Ciphertext as KyberCiphertext,
     }
 };
 
@@ -22,25 +22,26 @@ use pqcrypto_dilithium::{
     dilithium3::{
         PublicKey as DilithiumPublicKey,
         SecretKey as DilithiumSecretKey,
-        Signature as DilithiumSignature
+        DetachedSignature as DilithiumSignature
     }
 };
 
+// Import trait methods to use as_bytes, from_bytes, etc.
 use pqcrypto_traits::{
-    kem::{PublicKey as KemPublicKey, SecretKey as KemSecretKey, Ciphertext as KemCiphertext},
-    sign::{PublicKey as SignPublicKey, SecretKey as SignSecretKey, DetachedSignature},
+    kem::{SharedSecret, Ciphertext},
+    sign::DetachedSignature,
 };
 
-use rand::{rngs::OsRng, RngCore};
+use rand::prelude::*;  // Import all random generator traits
 use chacha20poly1305::{
     ChaCha20Poly1305, Key, Nonce,
     aead::{Aead, KeyInit, generic_array::GenericArray},
 };
-use sha2::{Sha256, Digest};
+use sha2::Sha256;
 use hkdf::Hkdf;
 
 /// Session state for tracking connection progress
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SessionState {
     /// Session is new, no keys exchanged
     New,
@@ -99,7 +100,9 @@ impl PqcSession {
     /// Create a new PQC session with a random Dilithium signing key
     pub fn new() -> Result<Self> {
         // Generate Dilithium keypair
-        let (signing_key, verification_key) = dilithium3::keypair();
+        let keypair = dilithium3::keypair();
+        let signing_key = keypair.1;        // SecretKey is the second item
+        let verification_key = keypair.0;   // PublicKey is the first item
         
         Ok(Self {
             role: Role::Client, // Default to client, can be changed later
@@ -157,7 +160,9 @@ impl PqcSession {
         }
         
         // Generate Kyber keypair
-        let (public_key, secret_key) = kyber768::keypair();
+        let keypair = kyber768::keypair();
+        let public_key = keypair.0;     // PublicKey is the first item
+        let secret_key = keypair.1;     // SecretKey is the second item
         
         // Store secret key
         self.local_secret_key = Some(secret_key);
@@ -180,8 +185,11 @@ impl PqcSession {
         // Decapsulate to get the shared secret
         let shared_secret = kyber768::decapsulate(ciphertext, secret_key);
         
+        // Get shared secret bytes
+        let shared_secret_bytes = shared_secret.as_bytes();
+        
         // Use HKDF to derive encryption key from shared secret
-        let encryption_key = self.derive_encryption_key(&shared_secret.as_bytes())?;
+        let encryption_key = self.derive_encryption_key(shared_secret_bytes)?;
         
         // Store the shared key
         self.shared_key = Some(encryption_key);
@@ -207,10 +215,19 @@ impl PqcSession {
         self.remote_public_key = Some(client_public_key.clone());
         
         // Encapsulate to generate shared secret and ciphertext
-        let (ciphertext, shared_secret) = kyber768::encapsulate(client_public_key);
+        let encapsulation_result = kyber768::encapsulate(client_public_key);
+        // In kyber768::encapsulate, the ciphertext is the first element of the tuple
+        // and the shared secret is the second
+        
+        // Manually extract components to ensure correct types
+        let ciphertext = encapsulation_result.0; // KyberCiphertext
+        let shared_secret = encapsulation_result.1; // KyberSharedSecret
+        
+        // Get shared secret bytes
+        let shared_secret_bytes = shared_secret.as_bytes();
         
         // Use HKDF to derive encryption key from shared secret
-        let encryption_key = self.derive_encryption_key(&shared_secret.as_bytes())?;
+        let encryption_key = self.derive_encryption_key(shared_secret_bytes)?;
         
         // Store the shared key
         self.shared_key = Some(encryption_key);
@@ -221,6 +238,7 @@ impl PqcSession {
         // Update state
         self.state = SessionState::KeyExchangeCompleted;
         
+        // Return the ciphertext
         Ok(ciphertext)
     }
     
@@ -289,17 +307,18 @@ impl PqcSession {
         
         // Sign the encrypted data
         let signature = dilithium3::detached_sign(&encrypted_data, &self.local_signing_key);
+        let signature_bytes = signature.as_bytes();
         
         // Prepare message
         let mut buffer = Vec::with_capacity(
-            sizes::HEADER_SIZE + encrypted_data.len() + signature.as_bytes().len()
+            sizes::HEADER_SIZE + encrypted_data.len() + signature_bytes.len()
         );
         
         // Add header
         let header = MessageHeader::new(
             MessageType::Data, 
             self.next_send_seq, 
-            (encrypted_data.len() + signature.as_bytes().len()) as u32
+            (encrypted_data.len() + signature_bytes.len()) as u32
         );
         buffer.extend_from_slice(&header.to_bytes());
         
@@ -307,7 +326,7 @@ impl PqcSession {
         buffer.extend_from_slice(&encrypted_data);
         
         // Add signature
-        buffer.extend_from_slice(signature.as_bytes());
+        buffer.extend_from_slice(signature_bytes);
         
         // Increment sequence number
         self.next_send_seq += 1;
@@ -346,7 +365,7 @@ impl PqcSession {
         }
         
         // Extract signature length - Dilithium signature size is fixed
-        let signature_size = dilithium3::SIGNATURE_BYTES;
+        let signature_size = dilithium3::signature_bytes();
         
         if header.payload_len as usize <= signature_size {
             return format_err("Payload too small to contain signature and data");
@@ -453,7 +472,8 @@ impl PqcSession {
         nonce[4] = msg_type.as_u8();
         
         // Last 7 bytes: random data
-        OsRng.fill_bytes(&mut nonce[5..]);
+        let mut rng = rand::thread_rng();
+        rng.fill_bytes(&mut nonce[5..]);
         
         *GenericArray::from_slice(&nonce)
     }
@@ -467,7 +487,7 @@ impl PqcSession {
         let hkdf = Hkdf::<Sha256>::new(Some(salt), shared_secret);
         
         let mut okm = [0u8; 32];
-        if let Err(_) = hkdf.expand(info, &mut okm) {
+        if hkdf.expand(info, &mut okm).is_err() {
             return crypto_err("HKDF key derivation failed");
         }
         
