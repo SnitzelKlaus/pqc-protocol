@@ -49,7 +49,7 @@ impl<'a> PqcSyncStreamSender<'a> {
         &mut self,
         reader: &mut R,
         buffer: &mut [u8],
-    ) -> impl Iterator<Item = Result<Vec<u8>>> + '_ {
+    ) -> StreamIterator<'_, R> {
         StreamIterator {
             sender: self,
             reader,
@@ -102,16 +102,16 @@ impl<'a> PqcSyncStreamSender<'a> {
 /// Iterator for streaming from a reader
 pub struct StreamIterator<'a, R: Read> {
     /// Reference to the PQC stream sender
-    sender: &'a mut PqcSyncStreamSender<'a>,
+    pub(crate) sender: &'a mut PqcSyncStreamSender<'a>,
     
     /// Reader to stream from
-    reader: &'a mut R,
+    pub(crate) reader: &'a mut R,
     
     /// Buffer for reading chunks
-    buffer: &'a mut [u8],
+    pub(crate) buffer: &'a mut [u8],
     
     /// Whether the stream is finished
-    finished: bool,
+    pub(crate) finished: bool,
 }
 
 impl<'a, R: Read> Iterator for StreamIterator<'a, R> {
@@ -329,16 +329,57 @@ pub trait PqcWriteExt: Write + Sized {
         &'a mut self,
         session: &'a mut PqcSession,
         reassemble: bool,
-    ) -> PqcSyncStreamReceiver<'a> {
-        if reassemble {
-            PqcSyncStreamReceiver::with_reassembly(session)
-        } else {
-            PqcSyncStreamReceiver::new(session)
+    ) -> WriteReceiver<'a, Self> {
+        WriteReceiver {
+            writer: self,
+            receiver: if reassemble {
+                PqcSyncStreamReceiver::with_reassembly(session)
+            } else {
+                PqcSyncStreamReceiver::new(session)
+            },
         }
     }
 }
 
 impl<T: Write + Sized> PqcWriteExt for T {}
+
+/// A wrapper that combines a writer with a stream receiver
+pub struct WriteReceiver<'a, W: Write> {
+    /// The underlying writer
+    writer: &'a mut W,
+    
+    /// The stream receiver
+    receiver: PqcSyncStreamReceiver<'a>,
+}
+
+impl<'a, W: Write> WriteReceiver<'a, W> {
+    /// Process a chunk and write the decrypted data
+    pub fn process_chunk(&mut self, chunk: &[u8]) -> Result<usize> {
+        let decrypted = self.receiver.process_chunk(chunk)?;
+        self.writer.write_all(&decrypted)?;
+        Ok(decrypted.len())
+    }
+    
+    /// Process chunks from a reader
+    pub fn process_reader<R: Read>(&mut self, reader: &mut R) -> Result<usize> {
+        self.receiver.process_to_writer(reader, self.writer).map(|n| n as usize)
+    }
+    
+    /// Get the reassembled data if reassembly is enabled
+    pub fn reassembled_data(&self) -> Option<&[u8]> {
+        self.receiver.reassembled_data()
+    }
+    
+    /// Take the reassembled data
+    pub fn take_reassembled_data(&mut self) -> Option<Vec<u8>> {
+        self.receiver.take_reassembled_data()
+    }
+    
+    /// Flush the underlying writer
+    pub fn flush(&mut self) -> Result<()> {
+        self.writer.flush().map_err(Error::Io)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -451,6 +492,44 @@ mod tests {
         // Also check the reassembly buffer
         let reassembled = receiver.reassembled_data().unwrap();
         assert_eq!(reassembled.len(), data.len());
+        assert_eq!(reassembled, &data[..]);
+        
+        Ok(())
+    }
+    
+    #[test]
+    fn test_extension_traits() -> Result<()> {
+        let (mut client, mut server) = create_test_session()?;
+        
+        // Test data
+        let data = b"Testing PqcReadExt and PqcWriteExt traits".to_vec();
+        let mut reader = std::io::Cursor::new(data.clone());
+        
+        // Use extension traits
+        let mut sender = reader.pqc_encrypt(&mut client, Some(16));
+        
+        // Verify the sender was created with correct chunk size
+        assert_eq!(sender.chunk_size(), 16);
+        
+        // Create output with extension trait
+        let mut output = Vec::new();
+        let mut writer_receiver = output.pqc_decrypt(&mut server, true);
+        
+        // Read and encrypt a chunk
+        let mut buffer = [0u8; 16];
+        let chunks = sender.stream_reader(&mut std::io::Cursor::new(&data), &mut buffer);
+        
+        // Process the chunks
+        for chunk_result in chunks {
+            let chunk = chunk_result?;
+            writer_receiver.process_chunk(&chunk)?;
+        }
+        
+        // Verify the output
+        assert_eq!(output, data);
+        
+        // Verify reassembled data
+        let reassembled = writer_receiver.reassembled_data().unwrap();
         assert_eq!(reassembled, &data[..]);
         
         Ok(())

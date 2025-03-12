@@ -14,9 +14,8 @@ use crate::{
 use tokio::io::{AsyncRead, AsyncWrite};
 use std::sync::{Arc, Mutex};
 use std::future::Future;
-use std::pin::Pin;
 
-use super::stream::{AsyncPqcSendStream, AsyncPqcReceiveStream};
+use super::stream::{AsyncPqcStreamSender, AsyncPqcStreamReceiver, AsyncStreamReader, AsyncStreamDataIterator};
 
 /// Asynchronous client for the PQC protocol
 pub struct AsyncPqcClient {
@@ -120,9 +119,28 @@ impl AsyncPqcClient {
         &'a self,
         reader: &'a mut R,
         chunk_size: Option<usize>,
-    ) -> AsyncPqcSendStream<'a, R> {
+    ) -> AsyncPqcStreamSender<'a, R> {
         let chunk_size = chunk_size.unwrap_or(MAX_CHUNK_SIZE);
-        AsyncPqcSendStream::new(reader, self.session.clone(), chunk_size)
+        AsyncPqcStreamSender {
+            reader,
+            session: self.session.clone(),
+            chunk_size,
+        }
+    }
+    
+    /// Stream data as bytes to the server
+    pub fn stream_data<'a>(
+        &'a self,
+        data: &'a [u8],
+        chunk_size: Option<usize>,
+    ) -> AsyncStreamDataIterator<'a> {
+        let chunk_size = chunk_size.unwrap_or(MAX_CHUNK_SIZE);
+        AsyncStreamDataIterator {
+            session: self.session.clone(),
+            data,
+            position: 0,
+            chunk_size,
+        }
     }
     
     /// Create a stream receiver to process data from the server
@@ -130,8 +148,12 @@ impl AsyncPqcClient {
         &'a self,
         writer: &'a mut W,
         reassemble: bool,
-    ) -> AsyncPqcReceiveStream<'a, W> {
-        AsyncPqcReceiveStream::new(writer, self.session.clone(), reassemble)
+    ) -> AsyncPqcStreamReceiver<'a, W> {
+        AsyncPqcStreamReceiver {
+            writer,
+            session: self.session.clone(),
+            reassembly_buffer: if reassemble { Some(Vec::new()) } else { None },
+        }
     }
     
     /// Check if key rotation is needed and initiate if necessary

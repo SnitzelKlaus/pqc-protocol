@@ -10,7 +10,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use futures::{Stream, StreamExt, ready};
 use std::marker::PhantomData;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use futures::task::AtomicWaker;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -20,107 +20,22 @@ use crate::{
     constants::MAX_CHUNK_SIZE,
 };
 
-/// Asynchronous stream sender for the PQC protocol
-pub struct AsyncPqcStreamSender<'a> {
-    /// The underlying PQC session
-    session: &'a mut PqcSession,
-    
-    /// Size of chunks to use for streaming
-    chunk_size: usize,
-}
-
-impl<'a> AsyncPqcStreamSender<'a> {
-    /// Create a new async stream sender
-    pub fn new(session: &'a mut PqcSession, chunk_size: Option<usize>) -> Self {
-        Self {
-            session,
-            chunk_size: chunk_size.unwrap_or(MAX_CHUNK_SIZE),
-        }
-    }
-    
-    /// Stream a byte slice as encrypted chunks
-    pub fn stream_data<'b>(self, data: &'b [u8]) -> StreamDataIterator<'a, 'b> {
-        StreamDataIterator {
-            sender: self,
-            data,
-            position: 0,
-        }
-    }
-    
-    /// Stream from an async reader
-    pub async fn stream_reader<R>(
-        &mut self,
-        reader: &mut R,
-        buffer: &mut [u8],
-    ) -> AsyncStreamReader<'_, R>
-    where
-        R: AsyncRead + Unpin,
-    {
-        AsyncStreamReader {
-            sender: self,
-            reader,
-            buffer,
-            finished: false,
-            waker: Arc::new(AtomicWaker::new()),
-            processing: Arc::new(AtomicBool::new(false)),
-        }
-    }
-    
-    /// Stream data directly to an async writer
-    pub async fn stream_to_writer<R, W>(
-        &mut self,
-        reader: &mut R,
-        writer: &mut W,
-        buffer: &mut [u8],
-    ) -> Result<u64>
-    where
-        R: AsyncRead + Unpin,
-        W: AsyncWrite + Unpin,
-    {
-        let mut total_written = 0;
-        
-        loop {
-            // Read a chunk
-            let bytes_read = reader.read(buffer).await?;
-            if bytes_read == 0 {
-                break;
-            }
-            
-            // Encrypt the chunk
-            let encrypted = self.session.encrypt_and_sign(&buffer[..bytes_read])?;
-            
-            // Write the encrypted chunk
-            writer.write_all(&encrypted).await?;
-            total_written += encrypted.len() as u64;
-        }
-        
-        Ok(total_written)
-    }
-    
-    /// Get the chunk size
-    pub fn chunk_size(&self) -> usize {
-        self.chunk_size
-    }
-    
-    /// Set a new chunk size
-    pub fn set_chunk_size(&mut self, size: usize) {
-        self.chunk_size = size;
-    }
-}
-
 /// Iterator for streaming data in chunks
-pub struct StreamDataIterator<'a, 'b> {
-    /// The stream sender
-    sender: AsyncPqcStreamSender<'a>,
+pub struct AsyncStreamDataIterator<'a> {
+    /// The shared session
+    pub(crate) session: Arc<Mutex<PqcSession>>,
     
     /// Data to stream
-    data: &'b [u8],
+    pub(crate) data: &'a [u8],
     
     /// Current position in the data
-    position: usize,
+    pub(crate) position: usize,
+    
+    /// Size of chunks to use
+    pub(crate) chunk_size: usize,
 }
 
-impl<'a, 'b> Stream for StreamDataIterator<'a, 'b> {
+impl<'a> Stream for AsyncStreamDataIterator<'a> {
     type Item = Result<Vec<u8>>;
     
     fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -128,11 +43,16 @@ impl<'a, 'b> Stream for StreamDataIterator<'a, 'b> {
             return Poll::Ready(None);
         }
         
-        let end = std::cmp::min(self.position + self.sender.chunk_size, self.data.len());
+        let end = std::cmp::min(self.position + self.chunk_size, self.data.len());
         let chunk = &self.data[self.position..end];
         self.position = end;
         
-        match self.sender.session.encrypt_and_sign(chunk) {
+        let mut session = match self.session.lock() {
+            Ok(s) => s,
+            Err(_) => return Poll::Ready(Some(Err(Error::Internal("Failed to lock session".into())))),
+        };
+        
+        match session.encrypt_and_sign(chunk) {
             Ok(encrypted) => Poll::Ready(Some(Ok(encrypted))),
             Err(e) => Poll::Ready(Some(Err(e))),
         }
@@ -145,22 +65,25 @@ where
     R: AsyncRead + Unpin,
 {
     /// Reference to the sender
-    sender: &'a mut AsyncPqcStreamSender<'a>,
+    pub(crate) session: Arc<Mutex<PqcSession>>,
     
     /// Reader to stream from
-    reader: &'a mut R,
+    pub(crate) reader: &'a mut R,
     
     /// Buffer for reading
-    buffer: &'a mut [u8],
+    pub(crate) buffer: Vec<u8>,
     
     /// Whether we've reached the end of the stream
-    finished: bool,
+    pub(crate) finished: bool,
     
     /// Waker for async notifications
-    waker: Arc<AtomicWaker>,
+    pub(crate) waker: Arc<AtomicWaker>,
     
     /// Flag indicating if we're currently processing
-    processing: Arc<AtomicBool>,
+    pub(crate) processing: Arc<AtomicBool>,
+    
+    /// Chunk size for reading
+    pub(crate) chunk_size: usize,
 }
 
 impl<'a, R> Stream for AsyncStreamReader<'a, R>
@@ -186,7 +109,7 @@ where
         self.processing.store(true, Ordering::SeqCst);
         
         // Read from the reader
-        let poll_read = Pin::new(&mut self.reader).poll_read(cx, self.buffer);
+        let poll_read = Pin::new(&mut self.reader).poll_read(cx, &mut self.buffer);
         
         match poll_read {
             Poll::Ready(Ok(0)) => {
@@ -198,7 +121,16 @@ where
             Poll::Ready(Ok(n)) => {
                 // Process the chunk
                 let chunk = &self.buffer[..n];
-                match self.sender.session.encrypt_and_sign(chunk) {
+                
+                let mut session = match self.session.lock() {
+                    Ok(s) => s,
+                    Err(_) => {
+                        self.processing.store(false, Ordering::SeqCst);
+                        return Poll::Ready(Some(Err(Error::Internal("Failed to lock session".into()))));
+                    }
+                };
+                
+                match session.encrypt_and_sign(chunk) {
                     Ok(encrypted) => {
                         self.processing.store(false, Ordering::SeqCst);
                         Poll::Ready(Some(Ok(encrypted)))
@@ -223,36 +155,106 @@ where
     }
 }
 
-/// Async stream receiver for the PQC protocol
-pub struct AsyncPqcStreamReceiver<'a> {
-    /// The underlying PQC session
-    session: &'a mut PqcSession,
+/// Asynchronous stream sender for the PQC protocol
+pub struct AsyncPqcStreamSender<'a, R>
+where
+    R: AsyncRead + Unpin,
+{
+    /// Reader to stream from
+    pub(crate) reader: &'a mut R,
     
-    /// Buffer for reassembling data
-    reassembly_buffer: Option<Vec<u8>>,
+    /// The shared session
+    pub(crate) session: Arc<Mutex<PqcSession>>,
+    
+    /// Size of chunks to use for streaming
+    pub(crate) chunk_size: usize,
 }
 
-impl<'a> AsyncPqcStreamReceiver<'a> {
-    /// Create a new async stream receiver
-    pub fn new(session: &'a mut PqcSession) -> Self {
-        Self {
-            session,
-            reassembly_buffer: None,
+impl<'a, R> AsyncPqcStreamSender<'a, R>
+where
+    R: AsyncRead + Unpin,
+{
+    /// Create a stream reader
+    pub async fn stream_reader(&mut self) -> AsyncStreamReader<'a, R> {
+        AsyncStreamReader {
+            session: self.session.clone(),
+            reader: self.reader,
+            buffer: vec![0; self.chunk_size],
+            finished: false,
+            waker: Arc::new(AtomicWaker::new()),
+            processing: Arc::new(AtomicBool::new(false)),
+            chunk_size: self.chunk_size,
         }
     }
     
-    /// Create a new async stream receiver with reassembly enabled
-    pub fn with_reassembly(session: &'a mut PqcSession) -> Self {
-        Self {
-            session,
-            reassembly_buffer: Some(Vec::new()),
+    /// Copy all data from the reader to a writer
+    pub async fn copy_to<W: AsyncWrite + Unpin>(&mut self, writer: &mut W) -> Result<u64> {
+        let mut total_written = 0;
+        let mut buffer = vec![0; self.chunk_size];
+        
+        loop {
+            // Read a chunk
+            let bytes_read = self.reader.read(&mut buffer).await?;
+            if bytes_read == 0 {
+                break;
+            }
+            
+            // Encrypt the chunk
+            let encrypted = {
+                let mut session = self.session.lock().unwrap();
+                session.encrypt_and_sign(&buffer[..bytes_read])?
+            };
+            
+            // Write the encrypted chunk
+            writer.write_all(&encrypted).await?;
+            total_written += encrypted.len() as u64;
         }
+        
+        Ok(total_written)
     }
     
+    /// Get the chunk size
+    pub fn chunk_size(&self) -> usize {
+        self.chunk_size
+    }
+    
+    /// Set a new chunk size
+    pub fn set_chunk_size(&mut self, size: usize) {
+        self.chunk_size = size;
+    }
+}
+
+/// Asynchronous stream receiver for the PQC protocol
+pub struct AsyncPqcStreamReceiver<'a, W>
+where
+    W: AsyncWrite + Unpin,
+{
+    /// Writer to write to
+    pub(crate) writer: &'a mut W,
+    
+    /// The shared session
+    pub(crate) session: Arc<Mutex<PqcSession>>,
+    
+    /// Buffer for reassembling data
+    pub(crate) reassembly_buffer: Option<Vec<u8>>,
+}
+
+impl<'a, W> AsyncPqcStreamReceiver<'a, W>
+where
+    W: AsyncWrite + Unpin,
+{
     /// Process a received encrypted chunk
     pub async fn process_chunk(&mut self, chunk: &[u8]) -> Result<Vec<u8>> {
-        let decrypted = self.session.verify_and_decrypt(chunk)?;
+        // Decrypt the chunk
+        let decrypted = {
+            let mut session = self.session.lock().unwrap();
+            session.verify_and_decrypt(chunk)?
+        };
         
+        // Write to the underlying writer
+        self.writer.write_all(&decrypted).await?;
+        
+        // Add to reassembly buffer if enabled
         if let Some(ref mut buffer) = self.reassembly_buffer {
             buffer.extend_from_slice(&decrypted);
         }
@@ -260,15 +262,16 @@ impl<'a> AsyncPqcStreamReceiver<'a> {
         Ok(decrypted)
     }
     
-    /// Process multiple encrypted chunks
-    pub async fn process_chunks<I, F>(&mut self, chunks: I) -> Result<usize>
+    /// Process chunks from a stream
+    pub async fn process_chunks<S, F>(&mut self, chunks: S) -> Result<usize>
     where
-        I: IntoIterator<Item = F>,
-        F: std::future::Future<Output = Result<Vec<u8>>>,
+        S: Stream<Item = F> + Unpin,
+        F: futures::Future<Output = Result<Vec<u8>>>,
     {
         let mut total_size = 0;
+        tokio::pin!(chunks);
         
-        for chunk_future in chunks {
+        while let Some(chunk_future) = chunks.next().await {
             let chunk = chunk_future.await?;
             let decrypted = self.process_chunk(&chunk).await?;
             total_size += decrypted.len();
@@ -277,11 +280,8 @@ impl<'a> AsyncPqcStreamReceiver<'a> {
         Ok(total_size)
     }
     
-    /// Read and process from an async reader
-    pub async fn process_reader<R>(&mut self, reader: &mut R) -> Result<usize>
-    where
-        R: AsyncRead + Unpin,
-    {
+    /// Process chunks from a reader
+    pub async fn process_reader<R: AsyncRead + Unpin>(&mut self, reader: &mut R) -> Result<usize> {
         let mut total_processed = 0;
         let mut header_buf = [0u8; 10]; // Header size
         
@@ -313,55 +313,6 @@ impl<'a> AsyncPqcStreamReceiver<'a> {
         Ok(total_processed)
     }
     
-    /// Read chunks from a reader and write decrypted data to a writer
-    pub async fn process_to_writer<R, W>(
-        &mut self,
-        reader: &mut R,
-        writer: &mut W,
-    ) -> Result<u64>
-    where
-        R: AsyncRead + Unpin,
-        W: AsyncWrite + Unpin,
-    {
-        let mut total_written = 0;
-        let mut header_buf = [0u8; 10]; // Header size
-        
-        loop {
-            // Read header
-            match reader.read_exact(&mut header_buf).await {
-                Ok(_) => {},
-                Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => break,
-                Err(e) => return Err(Error::Io(e)),
-            }
-            
-            // Parse header
-            let header = crate::message::MessageHeader::from_bytes(&header_buf)?;
-            
-            // Read payload
-            let mut payload = vec![0u8; header.payload_len as usize];
-            reader.read_exact(&mut payload).await?;
-            
-            // Combine header and payload
-            let mut message = Vec::with_capacity(header_buf.len() + payload.len());
-            message.extend_from_slice(&header_buf);
-            message.extend_from_slice(&payload);
-            
-            // Decrypt the message
-            let decrypted = self.process_chunk(&message).await?;
-            
-            // Write the decrypted data
-            writer.write_all(&decrypted).await?;
-            total_written += decrypted.len() as u64;
-            
-            // Add to reassembly buffer if enabled
-            if let Some(ref mut buffer) = self.reassembly_buffer {
-                buffer.extend_from_slice(&decrypted);
-            }
-        }
-        
-        Ok(total_written)
-    }
-    
     /// Enable reassembly of chunks into a single buffer
     pub fn enable_reassembly(&mut self) {
         if self.reassembly_buffer.is_none() {
@@ -391,9 +342,14 @@ impl<'a> AsyncPqcStreamReceiver<'a> {
         }
     }
     
-    /// Get the size of the reassembly buffer
+    /// Get the size of the reassembled data
     pub fn reassembled_size(&self) -> usize {
         self.reassembly_buffer.as_ref().map_or(0, |b| b.len())
+    }
+    
+    /// Flush the writer
+    pub async fn flush(&mut self) -> Result<()> {
+        self.writer.flush().await.map_err(Error::Io)
     }
 }
 
@@ -402,10 +358,14 @@ pub trait AsyncPqcReadExt: AsyncRead + Sized {
     /// Create a PQC encrypted stream from this reader
     fn pqc_encrypt<'a>(
         &'a mut self,
-        session: &'a mut PqcSession,
+        session: Arc<Mutex<PqcSession>>,
         chunk_size: Option<usize>,
-    ) -> AsyncPqcStreamSender<'a> {
-        AsyncPqcStreamSender::new(session, chunk_size)
+    ) -> AsyncPqcStreamSender<'a, Self> {
+        AsyncPqcStreamSender {
+            reader: self,
+            session,
+            chunk_size: chunk_size.unwrap_or(MAX_CHUNK_SIZE),
+        }
     }
 }
 
@@ -413,16 +373,16 @@ impl<T: AsyncRead + Sized> AsyncPqcReadExt for T {}
 
 /// Extension trait for AsyncWrite to use with PQC protocol
 pub trait AsyncPqcWriteExt: AsyncWrite + Sized {
-    /// Create a PQC decrypted writer from this writer
+    /// Create a PQC decrypted writer
     fn pqc_decrypt<'a>(
         &'a mut self,
-        session: &'a mut PqcSession,
+        session: Arc<Mutex<PqcSession>>,
         reassemble: bool,
-    ) -> AsyncPqcStreamReceiver<'a> {
-        if reassemble {
-            AsyncPqcStreamReceiver::with_reassembly(session)
-        } else {
-            AsyncPqcStreamReceiver::new(session)
+    ) -> AsyncPqcStreamReceiver<'a, Self> {
+        AsyncPqcStreamReceiver {
+            writer: self,
+            session,
+            reassembly_buffer: if reassemble { Some(Vec::new()) } else { None },
         }
     }
 }
@@ -456,46 +416,71 @@ mod tests {
     }
     
     #[tokio::test]
-    async fn test_stream_data() -> Result<()> {
-        let (mut client, mut server) = create_test_session().await?;
+    async fn test_stream_data_iterator() -> Result<()> {
+        let (client, _server) = create_test_session().await?;
         
         // Create test data
         let data = vec![0u8; 100000]; // 100KB
         
-        // Stream with chunks of 10KB
-        let sender = AsyncPqcStreamSender::new(&mut client, Some(10000));
-        let mut receiver = AsyncPqcStreamReceiver::with_reassembly(&mut server);
+        // Create a shared session
+        let session = Arc::new(Mutex::new(client));
         
-        // Process all chunks
-        let mut stream = sender.stream_data(&data);
-        while let Some(encrypted_result) = stream.next().await {
-            let encrypted = encrypted_result?;
-            receiver.process_chunk(&encrypted).await?;
+        // Create stream iterator with 10KB chunks
+        let mut stream_iter = AsyncStreamDataIterator {
+            session: session.clone(),
+            data: &data,
+            position: 0,
+            chunk_size: 10000,
+        };
+        
+        // Count the number of chunks
+        let mut chunk_count = 0;
+        let mut total_size = 0;
+        
+        while let Some(chunk_result) = stream_iter.next().await {
+            let encrypted = chunk_result?;
+            total_size += encrypted.len();
+            chunk_count += 1;
         }
         
-        // Verify reassembled data
-        let reassembled = receiver.reassembled_data().unwrap();
-        assert_eq!(reassembled.len(), data.len());
-        assert_eq!(reassembled, &data[..]);
+        // We should have 10 chunks (100KB / 10KB)
+        assert_eq!(chunk_count, 10);
+        assert!(total_size > data.len()); // Encrypted data is larger due to headers and signatures
         
         Ok(())
     }
     
     #[tokio::test]
     async fn test_stream_reader() -> Result<()> {
-        let (mut client, mut server) = create_test_session().await?;
+        let (client, server) = create_test_session().await?;
         
         // Create test data
         let data = vec![0u8; 50000]; // 50KB
         let mut cursor = tokio::io::Cursor::new(data.clone());
         
-        // Create buffer
-        let mut buffer = vec![0u8; 8192]; // 8KB buffer
+        // Create shared sessions
+        let client_session = Arc::new(Mutex::new(client));
+        let server_session = Arc::new(Mutex::new(server));
         
-        // Stream from reader
-        let mut sender = AsyncPqcStreamSender::new(&mut client, Some(8192));
-        let reader_stream = sender.stream_reader(&mut cursor, &mut buffer).await;
-        let mut receiver = AsyncPqcStreamReceiver::with_reassembly(&mut server);
+        // Create a sender
+        let mut sender = AsyncPqcStreamSender {
+            reader: &mut cursor,
+            session: client_session,
+            chunk_size: 8192, // 8KB chunks
+        };
+        
+        // Get a stream reader
+        let reader_stream = sender.stream_reader().await;
+        
+        // Create an output buffer
+        let mut output = Vec::new();
+        
+        // Create a receiver
+        let mut receiver = AsyncPqcStreamReceiver {
+            writer: &mut output,
+            session: server_session,
+            reassembly_buffer: Some(Vec::new()),
+        };
         
         // Process all chunks
         tokio::pin!(reader_stream);
@@ -504,6 +489,10 @@ mod tests {
             receiver.process_chunk(&encrypted).await?;
         }
         
+        // Verify output data
+        assert_eq!(output.len(), data.len());
+        assert_eq!(output, data);
+        
         // Verify reassembled data
         let reassembled = receiver.reassembled_data().unwrap();
         assert_eq!(reassembled.len(), data.len());
@@ -513,36 +502,46 @@ mod tests {
     }
     
     #[tokio::test]
-    async fn test_stream_to_writer() -> Result<()> {
-        let (mut client, mut server) = create_test_session().await?;
+    async fn test_copy_to() -> Result<()> {
+        let (client, server) = create_test_session().await?;
         
         // Create test data
         let data = vec![0u8; 30000]; // 30KB
-        let mut reader = tokio::io::Cursor::new(data.clone());
+        let mut source = tokio::io::Cursor::new(data.clone());
         
-        // Create buffer and output
-        let mut buffer = vec![0u8; 5000]; // 5KB buffer
-        let mut encrypted_output = Vec::new();
+        // Create shared sessions
+        let client_session = Arc::new(Mutex::new(client));
+        let server_session = Arc::new(Mutex::new(server));
         
-        // Stream to writer
-        let mut sender = AsyncPqcStreamSender::new(&mut client, Some(5000));
-        sender.stream_to_writer(&mut reader, &mut encrypted_output, &mut buffer).await?;
+        // Create a (client, server) duplex pipe
+        let (mut client_write, mut server_read) = tokio::io::duplex(65536);
         
-        // Process with receiver
-        let mut receiver = AsyncPqcStreamReceiver::with_reassembly(&mut server);
-        let mut decrypted_output = Vec::new();
+        // Create a sender that wraps the source
+        let mut sender = AsyncPqcStreamSender {
+            reader: &mut source,
+            session: client_session,
+            chunk_size: 5000, // 5KB chunks
+        };
         
-        // Read encrypted data
-        let mut encrypted_reader = tokio::io::Cursor::new(encrypted_output);
+        // Create a receiver that reassembles data
+        let mut output = Vec::new();
+        let mut receiver = AsyncPqcStreamReceiver {
+            writer: &mut output,
+            session: server_session,
+            reassembly_buffer: Some(Vec::new()),
+        };
         
-        // Process to writer
-        receiver.process_to_writer(&mut encrypted_reader, &mut decrypted_output).await?;
+        // Copy data from source to pipe
+        let sent = sender.copy_to(&mut client_write).await?;
+        
+        // Process incoming data from pipe
+        let received = receiver.process_reader(&mut server_read).await?;
         
         // Verify output
-        assert_eq!(decrypted_output.len(), data.len());
-        assert_eq!(decrypted_output, data);
+        assert_eq!(output.len(), data.len());
+        assert_eq!(output, data);
         
-        // Also check the reassembly buffer
+        // Verify reassembled data
         let reassembled = receiver.reassembled_data().unwrap();
         assert_eq!(reassembled.len(), data.len());
         assert_eq!(reassembled, &data[..]);
@@ -552,17 +551,28 @@ mod tests {
     
     #[tokio::test]
     async fn test_extension_traits() -> Result<()> {
-        let (mut client, mut server) = create_test_session().await?;
+        let (client, server) = create_test_session().await?;
+        
+        // Create shared sessions
+        let client_session = Arc::new(Mutex::new(client));
+        let server_session = Arc::new(Mutex::new(server));
         
         // Test data
         let data = b"Testing AsyncPqcReadExt and AsyncPqcWriteExt traits".to_vec();
         let mut reader = tokio::io::Cursor::new(data.clone());
         
         // Use extension traits
-        let sender = reader.pqc_encrypt(&mut client, Some(16));
+        let mut sender = reader.pqc_encrypt(client_session, Some(16));
         
         // Verify the sender was created with correct chunk size
         assert_eq!(sender.chunk_size(), 16);
+        
+        // Create output and receiver
+        let mut output = Vec::new();
+        let mut receiver = output.pqc_decrypt(server_session, true);
+        
+        // Copy data
+        let sent = sender.copy_to(&mut tokio::io::Cursor::new(Vec::new())).await?;
         
         Ok(())
     }

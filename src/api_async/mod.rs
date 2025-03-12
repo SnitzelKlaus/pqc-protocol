@@ -13,7 +13,3 @@ mod stream;
 pub use client::AsyncPqcClient;
 pub use server::AsyncPqcServer;
 pub use stream::{AsyncPqcSendStream, AsyncPqcReceiveStream, AsyncPqcReadExt, AsyncPqcWriteExt};
-
-// For backward compatibility
-pub use client::AsyncPqcClient as Client;
-pub use server::AsyncPqcServer as Server;

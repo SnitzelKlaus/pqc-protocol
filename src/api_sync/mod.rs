@@ -13,7 +13,3 @@ mod stream;
 pub use client::PqcClient;
 pub use server::PqcServer;
 pub use stream::{PqcSyncStreamSender, PqcSyncStreamReceiver, PqcReadExt, PqcWriteExt};
-
-// For backward compatibility with api.rs
-pub use client::PqcClient as Client;
-pub use server::PqcServer as Server;

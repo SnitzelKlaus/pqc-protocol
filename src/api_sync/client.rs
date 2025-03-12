@@ -16,6 +16,8 @@ use crate::{
 use pqcrypto_traits::kem::{PublicKey as KemPublicKey, Ciphertext as KemCiphertext};
 use pqcrypto_traits::sign::PublicKey as SignPublicKey;
 
+use super::stream::{PqcSyncStreamSender, PqcSyncStreamReceiver, StreamIterator};
+
 /// Client-side operations for the PQC protocol
 pub struct PqcClient {
     /// The underlying session
@@ -106,12 +108,21 @@ impl PqcClient {
     /// Stream data to the server lazily without materializing all chunks at once
     pub fn stream<'a>(&'a mut self, data: &'a [u8], chunk_size: Option<usize>) -> impl Iterator<Item = Result<Vec<u8>>> + 'a {
         let chunk_size = chunk_size.unwrap_or(MAX_CHUNK_SIZE);
-        PqcStreamSender::new(&mut self.session, Some(chunk_size)).stream_data(data)
+        PqcSyncStreamSender::new(&mut self.session, Some(chunk_size)).stream_data(data)
+    }
+
+    /// Create a stream sender for efficiently streaming data
+    pub fn stream_sender<'a>(&'a mut self, chunk_size: Option<usize>) -> PqcSyncStreamSender<'a> {
+        PqcSyncStreamSender::new(&mut self.session, chunk_size)
     }
 
     /// Create a stream receiver to reassemble chunked data
-    pub fn create_receiver(&mut self) -> PqcStreamReceiver {
-        PqcStreamReceiver::with_reassembly(&mut self.session)
+    pub fn stream_receiver(&mut self, reassemble: bool) -> PqcSyncStreamReceiver<'_> {
+        if reassemble {
+            PqcSyncStreamReceiver::with_reassembly(&mut self.session)
+        } else {
+            PqcSyncStreamReceiver::new(&mut self.session)
+        }
     }
     
     /// Check if key rotation is needed and initiate if necessary
