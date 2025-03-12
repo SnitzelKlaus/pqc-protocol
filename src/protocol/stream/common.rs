@@ -4,7 +4,7 @@ This module provides helper functions for encrypting and decrypting data chunks
 using a PqcSession.
 */
 
-use crate::{
+use crate::core::{
     error::Result,
     session::PqcSession,
 };

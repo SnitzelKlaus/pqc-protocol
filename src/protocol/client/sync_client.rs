@@ -4,13 +4,14 @@ This client directly holds a PqcSession and uses the common module for shared op
 */
 
 use crate::{
-    error::Result,
-    session::{PqcSession, Role, SessionState},
-    constants::MAX_CHUNK_SIZE,
+    core::{
+        error::Result,
+        session::{PqcSession, state::SessionState},
+        constants::MAX_CHUNK_SIZE,
+    },
+    protocol::stream::sync_stream::{PqcSyncStreamSender, PqcSyncStreamReceiver},
 };
-use crate::client::common;
-
-use super::stream::{PqcSyncStreamSender, PqcSyncStreamReceiver};
+use super::common;
 
 /// Synchronous client for the PQC protocol.
 pub struct PqcClient {
@@ -21,7 +22,7 @@ impl PqcClient {
     /// Create a new PQC client.
     pub fn new() -> Result<Self> {
         let mut session = PqcSession::new()?;
-        session.set_role(Role::Client);
+        session.set_role(crate::core::session::state::Role::Client);
         Ok(Self { session })
     }
     

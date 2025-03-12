@@ -7,12 +7,12 @@ building on the core streaming functionality.
 
 use std::io::{self, Read, Write};
 
-use crate::{
+use crate::core::{
     error::{Result, Error},
     session::PqcSession,
     constants::MAX_CHUNK_SIZE,
 };
-use crate::stream::common;
+use super::common;
 
 /// Enhanced synchronous stream sender for the PQC protocol.
 pub struct PqcSyncStreamSender<'a> {
@@ -187,7 +187,7 @@ impl<'a> PqcSyncStreamReceiver<'a> {
                 Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => break,
                 Err(e) => return Err(Error::Io(e)),
             }
-            let header = crate::message::MessageHeader::from_bytes(&header_buf)?;
+            let header = crate::core::message::format::MessageHeader::from_bytes(&header_buf)?;
             let mut payload = vec![0u8; header.payload_len as usize];
             reader.read_exact(&mut payload)?;
             let mut message = Vec::with_capacity(header_buf.len() + payload.len());
@@ -213,7 +213,7 @@ impl<'a> PqcSyncStreamReceiver<'a> {
                 Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => break,
                 Err(e) => return Err(Error::Io(e)),
             }
-            let header = crate::message::MessageHeader::from_bytes(&header_buf)?;
+            let header = crate::core::message::format::MessageHeader::from_bytes(&header_buf)?;
             let mut payload = vec![0u8; header.payload_len as usize];
             reader.read_exact(&mut payload)?;
             let mut message = Vec::with_capacity(header_buf.len() + payload.len());
@@ -344,7 +344,7 @@ mod tests {
     fn create_test_session() -> Result<(PqcSession, PqcSession)> {
         let mut client = PqcSession::new()?;
         let mut server = PqcSession::new()?;
-        server.set_role(crate::session::Role::Server);
+        server.set_role(crate::core::session::state::Role::Server);
         let client_pk = client.init_key_exchange()?;
         let ciphertext = server.accept_key_exchange(&client_pk)?;
         client.process_key_exchange(&ciphertext)?;

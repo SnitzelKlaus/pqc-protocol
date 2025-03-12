@@ -3,7 +3,7 @@ Common functionality for PQC client operations.
 This module factors out the common operations performed on a PqcSession.
 */
 
-use crate::{
+use crate::core::{
     error::Result,
     session::PqcSession,
 };
@@ -16,16 +16,20 @@ pub fn connect(session: &mut PqcSession) -> Result<Vec<u8>> {
 
 /// Process the server's response ciphertext and return the verification key bytes.
 pub fn process_response(session: &mut PqcSession, ciphertext: &[u8]) -> Result<Vec<u8>> {
+    use crate::core::error::{Error, CryptoError};
+    
     let ct = pqcrypto_kyber::kyber768::Ciphertext::from_bytes(ciphertext)
-        .map_err(|_| crate::crypto_err!(crate::error::CryptoError::InvalidKeyFormat))?;
+        .map_err(|_| Error::Crypto(CryptoError::InvalidKeyFormat))?;
     session.process_key_exchange(&ct)?;
     Ok(session.local_verification_key().as_bytes().to_vec())
 }
 
 /// Complete authentication using the server's verification key.
 pub fn authenticate(session: &mut PqcSession, server_verification_key: &[u8]) -> Result<()> {
+    use crate::core::error::{Error, AuthError};
+    
     let vk = pqcrypto_dilithium::dilithium3::PublicKey::from_bytes(server_verification_key)
-        .map_err(|_| crate::auth_err!(crate::error::AuthError::InvalidKeyFormat))?;
+        .map_err(|_| Error::Authentication(AuthError::InvalidKeyFormat))?;
     session.set_remote_verification_key(vk)?;
     session.complete_authentication()?;
     Ok(())

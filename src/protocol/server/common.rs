@@ -3,16 +3,17 @@ Common functionality for PQC server operations.
 This module factors out the common operations performed on a PqcSession for the server role.
 */
 
-use crate::{
-    error::Result,
+use crate::core::{
+    error::{Result, Error, KeyExchangeError, AuthError},
     session::PqcSession,
+    session::state::SessionState,
 };
 
 /// Accept a connection by processing the client's public key.
 /// Returns the ciphertext and local verification key as byte vectors.
 pub fn accept(session: &mut PqcSession, client_public_key: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
     let pk = pqcrypto_kyber::kyber768::PublicKey::from_bytes(client_public_key)
-        .map_err(|_| crate::key_exchange_err!(crate::error::KeyExchangeError::InvalidPublicKey))?;
+        .map_err(|_| Error::KeyExchange(KeyExchangeError::InvalidPublicKey))?;
     let ciphertext = session.accept_key_exchange(&pk)?;
     Ok((
         ciphertext.as_bytes().to_vec(),
@@ -23,7 +24,7 @@ pub fn accept(session: &mut PqcSession, client_public_key: &[u8]) -> Result<(Vec
 /// Complete authentication using the client's verification key.
 pub fn authenticate(session: &mut PqcSession, client_verification_key: &[u8]) -> Result<()> {
     let vk = pqcrypto_dilithium::dilithium3::PublicKey::from_bytes(client_verification_key)
-        .map_err(|_| crate::auth_err!(crate::error::AuthError::InvalidKeyFormat))?;
+        .map_err(|_| Error::Authentication(AuthError::InvalidKeyFormat))?;
     session.set_remote_verification_key(vk)?;
     session.complete_authentication()?;
     Ok(())
@@ -73,6 +74,6 @@ pub fn complete_rotation(session: &mut PqcSession, response: &[u8]) -> Result<()
 }
 
 /// Get the current session state.
-pub fn state(session: &PqcSession) -> crate::session::SessionState {
+pub fn state(session: &PqcSession) -> SessionState {
     session.state()
 }

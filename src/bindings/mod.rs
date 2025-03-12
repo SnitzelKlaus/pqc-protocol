@@ -13,7 +13,7 @@ pub mod wasm;
 
 // Re-export commonly used types for convenience
 #[cfg(feature = "ffi")]
-pub use ffi::*;
+pub use ffi::c_api::*;
 
 #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
-pub use wasm::*;
+pub use wasm::bindings::*;

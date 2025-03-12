@@ -13,12 +13,12 @@ use std::sync::{Arc, Mutex};
 use futures::task::AtomicWaker;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::{
+use crate::core::{
     error::{Result, Error},
     session::PqcSession,
     constants::MAX_CHUNK_SIZE,
 };
-use crate::stream::common;
+use super::common;
 
 /// Iterator for streaming data in chunks asynchronously.
 pub struct AsyncStreamDataIterator<'a> {
@@ -252,7 +252,7 @@ where
                 Err(e) => return Err(Error::Io(e)),
             }
             // Parse header (assume a MessageHeader type exists).
-            let header = crate::message::MessageHeader::from_bytes(&header_buf)?;
+            let header = crate::core::message::format::MessageHeader::from_bytes(&header_buf)?;
             // Read payload.
             let mut payload = vec![0u8; header.payload_len as usize];
             reader.read_exact(&mut payload).await?;
@@ -352,7 +352,7 @@ mod tests {
     async fn create_test_session() -> Result<(PqcSession, PqcSession)> {
         let mut client = PqcSession::new()?;
         let mut server = PqcSession::new()?;
-        server.set_role(crate::session::Role::Server);
+        server.set_role(crate::core::session::state::Role::Server);
         let client_pk = client.init_key_exchange()?;
         let ciphertext = server.accept_key_exchange(&client_pk)?;
         client.process_key_exchange(&ciphertext)?;

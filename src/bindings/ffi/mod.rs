@@ -6,6 +6,6 @@ allowing it to be used from C, C++, C#, and other languages
 that support C FFI.
 */
 
-mod c_api;
+pub mod c_api;
 
 pub use c_api::*;

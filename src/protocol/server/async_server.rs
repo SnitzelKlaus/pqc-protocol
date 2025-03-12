@@ -3,17 +3,17 @@ Asynchronous server implementation for the PQC protocol.
 This module provides server-side operations for the asynchronous API.
 */
 
-use crate::{
+use crate::core::{
     error::{Result, Error},
-    session::{PqcSession, Role, SessionState},
+    session::{PqcSession, state::{Role, SessionState}},
     constants::MAX_CHUNK_SIZE,
 };
-use crate::server::common;
+use super::common;
 use tokio::io::{AsyncRead, AsyncWrite};
 use std::sync::{Arc, Mutex};
 use std::future::Future;
 
-use crate::stream::{AsyncPqcStreamSender, AsyncPqcStreamReceiver, AsyncStreamDataIterator};
+use crate::protocol::stream::async_stream::{AsyncPqcStreamSender, AsyncPqcStreamReceiver, AsyncStreamDataIterator};
 
 /// Asynchronous server for the PQC protocol.
 pub struct AsyncPqcServer {
@@ -142,12 +142,12 @@ impl AsyncPqcServer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api_async::AsyncPqcClient;
+    use crate::protocol::client::async_client::AsyncPqcClient;
     
     #[tokio::test]
     async fn test_client_server_interaction() -> Result<()> {
         // Create client and server
-        let client = crate::api_async::AsyncPqcClient::new().await?;
+        let client = AsyncPqcClient::new().await?;
         let server = AsyncPqcServer::new().await?;
         
         // Client connects and gets public key

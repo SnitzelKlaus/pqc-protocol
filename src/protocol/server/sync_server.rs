@@ -4,12 +4,14 @@ This module provides server-side operations for the synchronous API.
 */
 
 use crate::{
-    error::{Result, Error},
-    session::{PqcSession, Role, SessionState},
-    constants::MAX_CHUNK_SIZE,
+    core::{
+        error::Result,
+        session::{PqcSession, state::SessionState},
+        constants::MAX_CHUNK_SIZE,
+    },
+    protocol::stream::sync_stream::{PqcSyncStreamSender, PqcSyncStreamReceiver},
 };
-use crate::server::common;
-use crate::stream::{PqcSyncStreamSender, PqcSyncStreamReceiver};
+use super::common;
 
 /// Synchronous server for the PQC protocol.
 pub struct PqcServer {
@@ -20,7 +22,7 @@ impl PqcServer {
     /// Create a new PQC server.
     pub fn new() -> Result<Self> {
         let mut session = PqcSession::new()?;
-        session.set_role(Role::Server);
+        session.set_role(crate::core::session::state::Role::Server);
         Ok(Self { session })
     }
 
@@ -105,6 +107,7 @@ impl PqcServer {
     }
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,7 +115,7 @@ mod tests {
     #[test]
     fn test_client_server_interaction() -> Result<()> {
         // Create client and server
-        let mut client = crate::api_sync::PqcClient::new()?;
+        let mut client = crate::protocol::client::sync_client::PqcClient::new()?;
         let mut server = PqcServer::new()?;
         
         // Client connects and gets public key

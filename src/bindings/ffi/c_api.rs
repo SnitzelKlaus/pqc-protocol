@@ -5,13 +5,13 @@ This module provides C-compatible bindings to the PQC protocol,
 exposing the core functionality through a C API.
 */
 
-use crate::{
+use crate::core::{
     session::PqcSession,
     error::Result,
     constants::sizes,
     crypto::{
-        KyberPublicKey, KyberSecretKey, KyberCiphertext,
-        DilithiumPublicKey, DilithiumSecretKey, DilithiumSignature,
+        key_exchange::{KyberPublicKey, KyberSecretKey, KyberCiphertext},
+        auth::{DilithiumPublicKey, DilithiumSecretKey, DilithiumSignature},
     },
 };
 
@@ -42,17 +42,22 @@ fn to_error_code<T>(result: Result<T>) -> (PqcErrorCode, Option<T>) {
     match result {
         Ok(value) => (PqcErrorCode::Success, Some(value)),
         Err(err) => {
+            use crate::core::error::Error;
+            
             let code = match err {
-                crate::error::Error::Io(_) => PqcErrorCode::IoError,
-                crate::error::Error::Protocol(_) => PqcErrorCode::SessionError,
-                crate::error::Error::Crypto(_) => PqcErrorCode::CryptoError,
-                crate::error::Error::InvalidSequence => PqcErrorCode::SessionError,
-                crate::error::Error::InvalidFormat(_) => PqcErrorCode::InvalidArgument,
-                crate::error::Error::Authentication(_) => PqcErrorCode::AuthError,
-                crate::error::Error::SessionNotInitialized => PqcErrorCode::SessionError,
-                crate::error::Error::UnsupportedVersion(_) => PqcErrorCode::SessionError,
-                crate::error::Error::Internal(_) => PqcErrorCode::InternalError,
-                crate::error::Error::KeyExchange(_) => PqcErrorCode::SessionError,
+                Error::Io(_) => PqcErrorCode::IoError,
+                Error::Protocol(_) => PqcErrorCode::SessionError,
+                Error::Crypto(_) => PqcErrorCode::CryptoError,
+                Error::InvalidSequence(_, _) => PqcErrorCode::SessionError,
+                Error::InvalidFormat(_) => PqcErrorCode::InvalidArgument,
+                Error::Authentication(_) => PqcErrorCode::AuthError,
+                Error::InvalidState { .. } => PqcErrorCode::SessionError,
+                Error::UnsupportedVersion(_) => PqcErrorCode::SessionError,
+                Error::Internal(_) => PqcErrorCode::InternalError,
+                Error::KeyExchange(_) => PqcErrorCode::SessionError,
+                Error::Memory(_) => PqcErrorCode::InternalError,
+                Error::RateLimit(_) => PqcErrorCode::SessionError,
+                Error::Timeout(_) => PqcErrorCode::SessionError,
             };
             (code, None)
         }

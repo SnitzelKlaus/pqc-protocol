@@ -3,17 +3,17 @@ Asynchronous client implementation for the PQC protocol.
 This client uses a shared (Arc‑Mutex) session and delegates common operations to the common module.
 */
 
-use crate::{
+use crate::core::{
     error::{Result, Error},
-    session::{PqcSession, Role, SessionState},
+    session::{PqcSession, state::{Role, SessionState}},
     constants::MAX_CHUNK_SIZE,
 };
-use crate::client::common;
+use super::common;
 use tokio::io::{AsyncRead, AsyncWrite};
 use std::sync::{Arc, Mutex};
 use std::future::Future;
 
-use super::stream::{
+use crate::protocol::stream::async_stream::{
     AsyncPqcStreamSender, AsyncPqcStreamReceiver, AsyncStreamDataIterator,
 };
 

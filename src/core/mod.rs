@@ -19,14 +19,17 @@ pub mod memory;
 // Export security utilities
 pub mod security;
 
+// Export streaming components
+pub mod streaming;
+
 // Protocol constants
 pub mod constants;
 
 // Error handling
 pub mod error;
 
-// Re-export commonly used types for convenience
-pub use error::{Error, Result};
-pub use message::{MessageType, MessageHeader};
-pub use session::{PqcSession, SessionState, Role};
-pub use constants::VERSION;
+// Re-exports for convenience
+pub use self::error::{Error, Result, AuthError, CryptoError, KeyExchangeError};
+pub use self::message::{types::MessageType, format::MessageHeader};
+pub use self::session::{state::SessionState, state::Role};
+pub use self::constants::VERSION;

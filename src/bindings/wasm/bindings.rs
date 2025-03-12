@@ -6,12 +6,15 @@ use wasm_bindgen::prelude::*;
 use js_sys::{Uint8Array, Array, Error as JsError};
 use web_sys::console;
 
-use crate::{
-    session::{PqcSession, Role, SessionState},
-    streaming::{PqcStreamSender, PqcStreamReceiver},
+use crate::core::{
+    session::{PqcSession, state::{Role, SessionState}},
+    streaming::{receiver::PqcStreamReceiver, sender::PqcStreamSender},
     constants::{VERSION, sizes, MAX_CHUNK_SIZE},
-    message::MessageType,
-    crypto::{KyberPublicKey, KyberCiphertext, DilithiumPublicKey, DilithiumSignature},
+    message::types::MessageType,
+    crypto::{
+        key_exchange::{KyberPublicKey, KyberCiphertext},
+        auth::{DilithiumPublicKey, DilithiumSignature},
+    },
 };
 
 /// WebAssembly wrapper for the PQC protocol session
