@@ -8,6 +8,11 @@ use crate::core::{
     session::PqcSession,
 };
 
+// Import the necessary traits to access their methods
+use pqcrypto_traits::kem::{SharedSecret, PublicKey};
+use pqcrypto_traits::sign::DetachedSignature;
+use crate::core::security::rotation::PqcSessionKeyRotation;
+
 /// Initiate key exchange and return public key bytes.
 pub fn connect(session: &mut PqcSession) -> Result<Vec<u8>> {
     let public_key = session.init_key_exchange()?;

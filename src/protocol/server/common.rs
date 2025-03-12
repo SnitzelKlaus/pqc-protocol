@@ -9,6 +9,11 @@ use crate::core::{
     session::state::SessionState,
 };
 
+// Import the necessary traits to access their methods
+use pqcrypto_traits::kem::{SharedSecret, PublicKey};
+use pqcrypto_traits::sign::DetachedSignature;
+use crate::core::security::rotation::PqcSessionKeyRotation;
+
 /// Accept a connection by processing the client's public key.
 /// Returns the ciphertext and local verification key as byte vectors.
 pub fn accept(session: &mut PqcSession, client_public_key: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {

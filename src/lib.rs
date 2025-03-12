@@ -50,28 +50,3 @@ pub mod r#async {
     pub use crate::protocol::server::async_server::AsyncPqcServer;
     pub use crate::protocol::stream::async_stream::{AsyncPqcStreamSender, AsyncPqcStreamReceiver, AsyncPqcReadExt, AsyncPqcWriteExt};
 }
-
-// Internal shortcuts for protocol modules to access core components
-pub(crate) mod abi {
-    // Re-export crypto types for internal use
-    pub use crate::core::crypto::{
-        key_exchange::KyberPublicKey, 
-        key_exchange::KyberSecretKey, 
-        key_exchange::KyberCiphertext,
-        auth::DilithiumPublicKey, 
-        auth::DilithiumSecretKey, 
-        auth::DilithiumSignature,
-    };
-    
-    // Re-export session types for internal use
-    pub use crate::core::session::{
-        manager::SessionManager,
-        state::{SessionState, Role, StateManager},
-    };
-    
-    // Re-export commonly used error/message types for internal use
-    pub use crate::core::message::{
-        format::{MessageHeader, MessageBuilder, MessageParser},
-        types::MessageType,
-    };
-}
