@@ -138,28 +138,40 @@ pub mod session;
 pub mod streaming;
 pub mod memory;
 pub mod security;
-pub mod api_sync;
 
-// Optional async support
-#[cfg(feature = "async")]
-pub mod api_async;
+pub mod client;
+pub mod server;
+pub mod stream;
 
-// Optional serde support
-#[cfg(feature = "serde-support")]
-pub mod serde;
+// Optional modules 
+#[cfg(feature = "serde-support")] 
+pub mod serde; 
 
-// Conditionally compile FFI module if the feature is enabled
-#[cfg(feature = "ffi")]
-pub mod ffi;
+#[cfg(feature = "ffi")] 
+pub mod ffi; 
 
-// Conditionally compile WASM module if the feature is enabled
-#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))] 
 pub mod wasm;
 
-// Re-export commonly used types for convenience
-pub use error::{Error, Result};
-pub use message::{MessageType, MessageHeader};
-pub use session::{PqcSession, SessionState, Role};
+// Re-export synchronous API components for ease of use 
+pub mod sync { 
+    pub use crate::client::sync_client::PqcClient; 
+    pub use crate::server::sync_server::PqcServer; 
+    pub use crate::stream::sync_stream::{PqcSyncStreamSender, PqcSyncStreamReceiver, PqcReadExt, PqcWriteExt}; 
+}
+
+// Re-export asynchronous API components (enabled with the "async" feature) 
+#[cfg(feature = "async")] 
+pub mod r#async { 
+    pub use crate::client::async_client::AsyncPqcClient; 
+    pub use crate::server::async_server::AsyncPqcServer; 
+    pub use crate::stream::async_stream::{AsyncPqcSendStream, AsyncPqcReceiveStream, AsyncPqcReadExt, AsyncPqcWriteExt}; 
+}
+
+// Re-export commonly used types for convenience 
+pub use error::{Error, Result}; 
+pub use message::{MessageType, MessageHeader}; 
+pub use session::{PqcSession, SessionState, Role}; 
 pub use streaming::{PqcStreamSender, PqcStreamReceiver};
 
 // Export protocol version

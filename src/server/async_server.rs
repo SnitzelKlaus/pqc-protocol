@@ -1,114 +1,65 @@
 /*!
 Asynchronous server implementation for the PQC protocol.
-
-This module provides the server-side operations for the asynchronous API.
+This module provides server-side operations for the asynchronous API.
 */
 
 use crate::{
     error::{Result, Error},
     session::{PqcSession, Role, SessionState},
-    security::rotation::PqcSessionKeyRotation,
     constants::MAX_CHUNK_SIZE,
 };
-
+use crate::server::common;
 use tokio::io::{AsyncRead, AsyncWrite};
 use std::sync::{Arc, Mutex};
 use std::future::Future;
 
-use super::stream::{AsyncPqcStreamSender, AsyncPqcStreamReceiver, AsyncStreamDataIterator};
+use crate::stream::{AsyncPqcStreamSender, AsyncPqcStreamReceiver, AsyncStreamDataIterator};
 
-/// Asynchronous server for the PQC protocol
+/// Asynchronous server for the PQC protocol.
 pub struct AsyncPqcServer {
-    /// The underlying session
     session: Arc<Mutex<PqcSession>>,
 }
 
 impl AsyncPqcServer {
-    /// Create a new async PQC server
+    /// Create a new async PQC server.
     pub async fn new() -> Result<Self> {
         let mut session = PqcSession::new()?;
         session.set_role(Role::Server);
-        Ok(Self { 
-            session: Arc::new(Mutex::new(session))
-        })
+        Ok(Self { session: Arc::new(Mutex::new(session)) })
     }
-    
-    /// Accept a connection asynchronously
-    ///
-    /// Takes the client's public key and returns the ciphertext and verification key to send back.
+
+    /// Accept a connection asynchronously.
+    /// Takes the client's public key and returns the ciphertext and verification key.
     pub async fn accept(&self, client_public_key: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
-        // Convert bytes to Kyber public key
-        let pk = pqcrypto_kyber::kyber768::PublicKey::from_bytes(client_public_key)
-            .map_err(|_| {
-                crate::key_exchange_err!(crate::error::KeyExchangeError::InvalidPublicKey)
-            })?;
-        
         let mut session = self.session.lock().unwrap();
-        
-        // Accept the key exchange
-        let ciphertext = session.accept_key_exchange(&pk)?;
-        
-        // Return the ciphertext and verification key
-        Ok((
-            ciphertext.as_bytes().to_vec(),
-            session.local_verification_key().as_bytes().to_vec()
-        ))
+        common::accept(&mut session, client_public_key)
     }
-    
-    /// Complete authentication asynchronously with the client's verification key
-    ///
-    /// Takes the client's verification key and completes the connection.
+
+    /// Complete authentication asynchronously with the client's verification key.
     pub async fn authenticate(&self, client_verification_key: &[u8]) -> Result<()> {
-        // Convert bytes to Dilithium verification key
-        let vk = pqcrypto_dilithium::dilithium3::PublicKey::from_bytes(client_verification_key)
-            .map_err(|_| {
-                crate::auth_err!(crate::error::AuthError::InvalidKeyFormat)
-            })?;
-        
         let mut session = self.session.lock().unwrap();
-        
-        // Set the remote verification key
-        session.set_remote_verification_key(vk)?;
-        
-        // Complete authentication
-        session.complete_authentication()?;
-        
-        Ok(())
+        common::authenticate(&mut session, client_verification_key)
     }
-    
-    /// Send a message to the client asynchronously
+
+    /// Send a message to the client asynchronously.
     pub async fn send(&self, data: &[u8]) -> Result<Vec<u8>> {
         let mut session = self.session.lock().unwrap();
-        let result = session.encrypt_and_sign(data)?;
-        
-        // Track sent data for key rotation if enabled
-        if session.should_rotate_keys() {
-            session.track_sent(result.len());
-        }
-        
-        Ok(result)
+        common::send(&mut session, data)
     }
-    
-    /// Receive a message from the client asynchronously
+
+    /// Receive a message from the client asynchronously.
     pub async fn receive(&self, encrypted: &[u8]) -> Result<Vec<u8>> {
         let mut session = self.session.lock().unwrap();
-        let result = session.verify_and_decrypt(encrypted)?;
-        
-        // Track received data for key rotation if enabled
-        if session.should_rotate_keys() {
-            session.track_received(encrypted.len());
-        }
-        
-        Ok(result)
+        common::receive(&mut session, encrypted)
     }
-    
-    /// Close the connection asynchronously
+
+    /// Close the connection asynchronously.
     pub async fn close(&self) -> Vec<u8> {
         let mut session = self.session.lock().unwrap();
-        session.close()
+        common::close(&mut session)
     }
-    
-    /// Create a stream sender to stream data to the client
+
+    /// Create a stream sender to stream data to the client.
     pub fn stream_sender<'a, R: AsyncRead + Unpin + 'a>(
         &'a self,
         reader: &'a mut R,
@@ -121,8 +72,8 @@ impl AsyncPqcServer {
             chunk_size,
         }
     }
-    
-    /// Stream data as bytes to the client
+
+    /// Stream data as bytes to the client.
     pub fn stream_data<'a>(
         &'a self,
         data: &'a [u8],
@@ -136,8 +87,8 @@ impl AsyncPqcServer {
             chunk_size,
         }
     }
-    
-    /// Create a stream receiver to process data from the client
+
+    /// Create a stream receiver to process data from the client.
     pub fn stream_receiver<'a, W: AsyncWrite + Unpin + 'a>(
         &'a self,
         writer: &'a mut W,
@@ -149,42 +100,32 @@ impl AsyncPqcServer {
             reassembly_buffer: if reassemble { Some(Vec::new()) } else { None },
         }
     }
-    
-    /// Check if key rotation is needed and initiate if necessary
-    ///
-    /// Returns a rotation message to send if rotation is needed,
-    /// or None if no rotation is needed.
+
+    /// Check if key rotation is needed and initiate it if necessary.
     pub async fn check_rotation(&self) -> Result<Option<Vec<u8>>> {
         let mut session = self.session.lock().unwrap();
-        if session.should_rotate_keys() {
-            let rotation_msg = session.initiate_key_rotation()?;
-            Ok(Some(rotation_msg))
-        } else {
-            Ok(None)
-        }
+        common::check_rotation(&mut session)
     }
-    
-    /// Process a key rotation message from the client
-    ///
-    /// Returns a response message to send back to the client.
+
+    /// Process a key rotation message from the client.
     pub async fn process_rotation(&self, rotation_msg: &[u8]) -> Result<Vec<u8>> {
         let mut session = self.session.lock().unwrap();
-        session.process_key_rotation(rotation_msg)
+        common::process_rotation(&mut session, rotation_msg)
     }
-    
-    /// Complete key rotation based on the client's response
+
+    /// Complete key rotation based on the client's response.
     pub async fn complete_rotation(&self, response: &[u8]) -> Result<()> {
         let mut session = self.session.lock().unwrap();
-        session.complete_key_rotation(response)
+        common::complete_rotation(&mut session, response)
     }
-    
-    /// Get the current connection state
+
+    /// Get the current connection state.
     pub fn state(&self) -> Result<SessionState> {
         let session = self.session.lock().unwrap();
         Ok(session.state())
     }
-    
-    /// Execute a function that requires mutable access to the session
+
+    /// Execute a function that requires mutable access to the session.
     pub async fn with_session<F, Fut, R>(&self, f: F) -> Result<R>
     where
         F: FnOnce(&mut PqcSession) -> Fut,
@@ -192,7 +133,7 @@ impl AsyncPqcServer {
     {
         let mut session = self.session.lock().unwrap();
         let future = f(&mut session);
-        // Need to drop the lock before awaiting to avoid deadlocks
+        // Drop the lock before awaiting to avoid deadlocks.
         drop(session);
         future.await
     }
@@ -206,7 +147,7 @@ mod tests {
     #[tokio::test]
     async fn test_client_server_interaction() -> Result<()> {
         // Create client and server
-        let client = AsyncPqcClient::new().await?;
+        let client = crate::api_async::AsyncPqcClient::new().await?;
         let server = AsyncPqcServer::new().await?;
         
         // Client connects and gets public key
@@ -215,7 +156,7 @@ mod tests {
         // Server accepts connection and gets ciphertext and verification key
         let (server_ct, server_vk) = server.accept(&client_pk).await?;
         
-        // Client processes server response and gets own verification key
+        // Client processes server response and gets its own verification key
         let client_vk = client.process_response(&server_ct).await?;
         
         // Server authenticates with client verification key
