@@ -14,6 +14,9 @@ pub mod auth;
 // Symmetric encryption
 pub mod cipher;
 
+// Config
+pub mod config;
+
 // Re-export frequently used types
 
 // Kyber types
