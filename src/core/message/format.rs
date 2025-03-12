@@ -5,7 +5,7 @@ This module defines the structure and format of protocol messages,
 including serialization and deserialization.
 */
 
-use crate::{
+use crate::core::{
     constants::{VERSION, sizes},
     error::{Error, Result},
     message::types::MessageType,

@@ -5,16 +5,24 @@ This module provides the main session management class that handles the
 key exchange, authentication, and secure communication.
 */
 
-use crate::{
-    error::{Result, Error},
+use crate::core::{
+    error::{Result, Error, AuthError},
     constants::sizes,
     crypto::{
-        KeyExchange, Cipher, Authentication,
-        KyberPublicKey, KyberSecretKey, KyberCiphertext,
-        DilithiumPublicKey, DilithiumSecretKey, DilithiumSignature,
+        key_exchange::KeyExchange, 
+        Cipher, 
+        auth::Authentication,
+        KyberPublicKey, 
+        KyberSecretKey, 
+        KyberCiphertext,
+        DilithiumPublicKey, 
+        DilithiumSecretKey, 
+        DilithiumSignature,
     },
     message::{
-        MessageType, MessageBuilder, MessageParser,
+        MessageType, 
+        MessageBuilder, 
+        MessageParser,
     },
     memory::SecureMemory,
     security::rotation::{KeyRotationManager, KeyRotationParams, SessionStats, PqcSessionKeyRotation},
@@ -23,7 +31,7 @@ use crate::{
 use crate::{protocol_err, invalid_state_err, auth_err};
 
 use std::sync::atomic::{AtomicU32, Ordering};
-use pqcrypto_traits::kem::SharedSecret;
+use pqcrypto_traits::kem::{SharedSecret, PublicKey};
 use pqcrypto_traits::sign::DetachedSignature;
 
 use super::state::{StateManager, SessionState, Role};
@@ -195,7 +203,7 @@ impl SessionManager {
         }
         
         if self.remote_verification_key.is_none() {
-            return auth_err!(crate::error::AuthError::MissingVerificationKey);
+            return auth_err!(AuthError::MissingVerificationKey);
         }
         
         // At this point, we would normally verify a challenge.
@@ -218,7 +226,8 @@ impl SessionManager {
         if self.should_rotate_keys() {
             // In production, we would handle rotation here
             // For now, just track that we detected the need
-            log::info!("Key rotation needed, but not implemented yet");
+            // Replacing log::info with a comment for now
+            // log::info!("Key rotation needed, but not implemented yet");
         }
         
         let cipher = self.cipher.as_ref()
@@ -260,7 +269,7 @@ impl SessionManager {
             .ok_or_else(|| Error::Internal("Cipher not initialized".into()))?;
         
         let verification_key = self.remote_verification_key.as_ref()
-            .ok_or_else(|| Error::Authentication(crate::error::AuthError::MissingVerificationKey))?;
+            .ok_or_else(|| Error::Authentication(AuthError::MissingVerificationKey))?;
         
         // Parse message
         let parser = MessageParser::new(message)
@@ -314,7 +323,7 @@ impl SessionManager {
     /// Verify a signature
     pub fn verify(&self, data: &[u8], signature: &DilithiumSignature) -> Result<()> {
         let verification_key = self.remote_verification_key.as_ref()
-            .ok_or_else(|| Error::Authentication(crate::error::AuthError::MissingVerificationKey))?;
+            .ok_or_else(|| Error::Authentication(AuthError::MissingVerificationKey))?;
         
         Authentication::verify(data, signature, verification_key)
     }
@@ -400,6 +409,7 @@ impl PqcSessionKeyRotation for SessionManager {
         // Mark rotation as in progress
         self.rotation_manager.begin_rotation();
         
+        // TODO:
         // Generate new Kyber key pair
         let (public_key, secret_key) = KeyExchange::generate_keypair();
         
@@ -448,7 +458,7 @@ impl PqcSessionKeyRotation for SessionManager {
         Ok(response)
     }
     
-    fn complete_key_rotation(&mut self, message: &[u8]) -> Result<()> {
+    fn complete_key_rotation(&mut self, _message: &[u8]) -> Result<()> {
         // Placeholder implementation - this would handle switching to new keys
         
         if !self.state_manager.can_transfer_data() {
@@ -477,6 +487,7 @@ impl PqcSessionKeyRotation for SessionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
     
     #[test]
     fn test_session_lifecycle() -> Result<()> {

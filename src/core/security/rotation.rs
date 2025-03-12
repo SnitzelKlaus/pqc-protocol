@@ -7,7 +7,7 @@ to maintain forward secrecy and security.
 
 use std::time::{Duration, Instant};
 
-use crate::{
+use crate::core::{
     error::Result,
     session::PqcSession,
 };
