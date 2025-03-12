@@ -15,6 +15,8 @@ use crate::core::{
     crypto::{Cipher, auth::Authentication},
     session::auth_manager::AuthManager,
     session::key_manager::KeyManager,
+    security::constant_time::constant_time_increment,
+    constants::features,
 };
 use crate::protocol_err;
 
@@ -48,8 +50,14 @@ impl DataManager {
     ) -> Result<Vec<u8>> {
         let cipher = key_manager.get_cipher()?;
         
-        // Get sequence number
-        let seq_num = self.send_sequence.fetch_add(1, Ordering::SeqCst);
+        // Get sequence number using constant-time operations if enabled
+        let seq_num = if features::CONSTANT_TIME {
+            let mut seq = 0u32;
+            constant_time_increment(&mut seq, self.send_sequence.fetch_add(1, Ordering::SeqCst));
+            seq
+        } else {
+            self.send_sequence.fetch_add(1, Ordering::SeqCst)
+        };
         
         // Create nonce
         let nonce = Cipher::create_nonce(seq_num, MessageType::Data);
@@ -58,7 +66,7 @@ impl DataManager {
         let encrypted = cipher.encrypt(&nonce, data)?;
         
         // Sign the encrypted data
-        let signature = auth_manager.sign(&encrypted);
+        let signature = auth_manager.sign(&encrypted)?;
         
         // Create message
         let message = MessageBuilder::new(MessageType::Data, seq_num)
@@ -89,13 +97,17 @@ impl DataManager {
             return Err(Error::InvalidSequence(expected_seq, header.seq_num));
         }
         
-        // Get signature
-        let signature = parser.signature(Authentication::signature_size())?;
+        // Get the signature size from auth_manager
+        let signature_size = auth_manager.signature_size();
         
-        let signature = Authentication::signature_from_bytes(signature)?;
+        // Get signature
+        let signature_bytes = parser.signature(signature_size)?;
+        
+        // Convert bytes to signature using auth_manager's algorithm
+        let signature = auth_manager.signature_from_bytes(signature_bytes)?;
         
         // Get payload
-        let encrypted = parser.payload(Authentication::signature_size())?;
+        let encrypted = parser.payload(signature_size)?;
         
         // Verify signature
         auth_manager.verify(encrypted, &signature)?;
@@ -107,7 +119,13 @@ impl DataManager {
         let decrypted = cipher.decrypt(&nonce, encrypted)?;
         
         // Increment sequence number
-        self.recv_sequence.fetch_add(1, Ordering::SeqCst);
+        if features::CONSTANT_TIME {
+            let mut seq = expected_seq;
+            constant_time_increment(&mut seq, 1);
+            self.recv_sequence.store(seq, Ordering::SeqCst);
+        } else {
+            self.recv_sequence.fetch_add(1, Ordering::SeqCst);
+        }
         
         Ok(decrypted)
     }
@@ -172,6 +190,12 @@ impl DataManager {
         // Create close message
         MessageBuilder::new(MessageType::Close, close_seq)
             .build()
+    }
+}
+
+impl Default for DataManager {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

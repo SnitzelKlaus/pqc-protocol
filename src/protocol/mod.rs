@@ -12,6 +12,12 @@ pub mod server;
 // Streaming utilities
 pub mod stream;
 
+// Shared implementation
+pub mod shared;
+
+// Builder
+pub mod builder;
+
 // Re-export for convenience
 pub use client::sync_client::PqcClient;
 pub use server::sync_server::PqcServer;

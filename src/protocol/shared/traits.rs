@@ -7,6 +7,7 @@ between sync and async APIs.
 
 use crate::core::error::Result;
 use crate::core::session::SessionState;
+use crate::core::crypto::config::CryptoConfig;
 
 /// Common trait for both sync and async protocol implementations
 pub trait PqcEndpoint {
@@ -62,10 +63,61 @@ pub trait PqcKeyRotation {
     fn complete_rotation(&mut self, response: &[u8]) -> Result<()>;
 }
 
-/// Extension of PqcClientEndpoint for key rotation
+/// Trait for streaming data in chunks
+pub trait PqcStreamSender {
+    /// Get the current chunk size
+    fn chunk_size(&self) -> usize;
+    
+    /// Set a new chunk size
+    fn set_chunk_size(&mut self, size: usize);
+    
+    /// Stream data from a buffer
+    fn stream_data<'a>(&'a mut self, data: &'a [u8]) -> Box<dyn Iterator<Item = Result<Vec<u8>>> + 'a>;
+}
+
+/// Trait for reassembling streamed data
+pub trait PqcStreamReceiver {
+    /// Process a received encrypted chunk
+    fn process_chunk(&mut self, chunk: &[u8]) -> Result<Vec<u8>>;
+    
+    /// Enable chunk reassembly
+    fn enable_reassembly(&mut self);
+    
+    /// Disable chunk reassembly
+    fn disable_reassembly(&mut self);
+    
+    /// Get the reassembled data if available
+    fn reassembled_data(&self) -> Option<&[u8]>;
+    
+    /// Take ownership of the reassembled data
+    fn take_reassembled_data(&mut self) -> Option<Vec<u8>>;
+}
+
+/// Trait for endpoints that can be configured
+pub trait PqcConfigurable {
+    /// Get the current configuration
+    fn get_config(&self) -> &CryptoConfig;
+    
+    /// Update the configuration
+    fn update_config(&mut self, config: CryptoConfig) -> Result<()>;
+}
+
+/// Trait for endpoints that support memory management
+pub trait PqcMemoryControl {
+    /// Zero sensitive memory
+    fn zero_sensitive_memory(&mut self);
+    
+    /// Check if memory is securely managed
+    fn is_memory_secure(&self) -> bool;
+    
+    /// Set memory security level
+    fn set_memory_security(&mut self, secure: bool) -> Result<()>;
+}
+
+/// Client with key rotation capabilities
 pub trait PqcClientKeyRotation: PqcClientEndpoint + PqcKeyRotation {}
 
-/// Extension of PqcServerEndpoint for key rotation
+/// Server with key rotation capabilities  
 pub trait PqcServerKeyRotation: PqcServerEndpoint + PqcKeyRotation {}
 
 /// Common trait for streaming capabilities
@@ -75,4 +127,31 @@ pub trait PqcStreaming {
     
     /// Set the chunk size
     fn set_chunk_size(&mut self, size: usize);
+}
+
+/// Unified trait for endpoints with all features
+pub trait UnifiedPqcEndpoint: PqcEndpoint + PqcKeyRotation + PqcConfigurable + PqcMemoryControl {
+    /// Get a string identifier for this endpoint
+    fn identifier(&self) -> String;
+    
+    /// Get the protocol version
+    fn protocol_version(&self) -> u8;
+}
+
+/// Unified trait for client with all features
+pub trait UnifiedPqcClient: UnifiedPqcEndpoint + PqcClientEndpoint {
+    /// Create a stream sender
+    fn create_stream_sender<'a>(&'a mut self) -> Box<dyn PqcStreamSender + 'a>;
+    
+    /// Create a stream receiver
+    fn create_stream_receiver<'a>(&'a mut self, reassemble: bool) -> Box<dyn PqcStreamReceiver + 'a>;
+}
+
+/// Unified trait for server with all features
+pub trait UnifiedPqcServer: UnifiedPqcEndpoint + PqcServerEndpoint {
+    /// Create a stream sender
+    fn create_stream_sender<'a>(&'a mut self) -> Box<dyn PqcStreamSender + 'a>;
+    
+    /// Create a stream receiver
+    fn create_stream_receiver<'a>(&'a mut self, reassemble: bool) -> Box<dyn PqcStreamReceiver + 'a>;
 }

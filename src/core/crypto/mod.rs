@@ -17,6 +17,9 @@ pub mod cipher;
 // Config
 pub mod config;
 
+// Registry for algorithm management
+pub mod registry;
+
 // Re-export frequently used types
 
 // Kyber types
@@ -34,3 +37,8 @@ pub use pqcrypto_dilithium::dilithium3::{
 };
 
 pub use cipher::Cipher;
+pub use registry::{
+    get_registry, register_key_exchange, register_signature, register_symmetric,
+    get_key_exchange, get_signature, get_symmetric,
+    list_key_exchange_algorithms, list_signature_algorithms, list_symmetric_algorithms
+};
