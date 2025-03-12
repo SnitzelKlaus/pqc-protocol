@@ -95,8 +95,8 @@ mod tests {
     
     #[test]
     fn test_auth_sign_verify() -> Result<()> {
-        let alice = AuthManager::new()?;
-        let bob = AuthManager::new()?;
+        let mut alice = AuthManager::new()?;
+        let mut bob = AuthManager::new()?;
         
         // Exchange verification keys
         alice.set_remote_verification_key(bob.local_verification_key().clone())?;

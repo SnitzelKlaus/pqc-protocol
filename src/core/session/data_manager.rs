@@ -18,6 +18,7 @@ use crate::core::{
 };
 use crate::protocol_err;
 
+use pqcrypto_traits::sign::DetachedSignature;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 /// DataManager handles secure data transmission during the established phase
@@ -192,8 +193,8 @@ mod tests {
         alice_key_manager.process_key_exchange(&ciphertext)?;
         
         // Create auth managers
-        let alice_auth_manager = AuthManager::new()?;
-        let bob_auth_manager = AuthManager::new()?;
+        let mut alice_auth_manager = AuthManager::new()?;
+        let mut bob_auth_manager = AuthManager::new()?;
         
         // Exchange verification keys
         alice_auth_manager.set_remote_verification_key(bob_auth_manager.local_verification_key().clone())?;

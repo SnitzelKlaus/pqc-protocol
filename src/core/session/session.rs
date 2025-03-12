@@ -26,6 +26,7 @@ use crate::core::{
     message::{MessageType, MessageBuilder, MessageParser},
 };
 use crate::{invalid_state_err, auth_err, protocol_err};
+use pqcrypto_traits::kem::PublicKey;
 
 /// Main session for the PQC protocol
 pub struct Session {
@@ -399,6 +400,7 @@ impl PqcSessionKeyRotation for Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::error::Error;
     
     #[test]
     fn test_session_lifecycle() -> Result<()> {
