@@ -172,7 +172,7 @@ impl std::error::Error for ErrorContext {
 #[macro_export]
 macro_rules! with_context {
     ($error:expr, $context:expr) => {
-        $crate::error::ErrorContext {
+        $crate::core::error::ErrorContext {
             error: $error,
             context: $context.to_string(),
             file: file!(),
@@ -185,10 +185,10 @@ macro_rules! with_context {
 #[macro_export]
 macro_rules! protocol_err {
     ($msg:expr) => {
-        Err($crate::error::Error::Protocol($msg.to_string()))
+        Err($crate::core::error::Error::Protocol($msg.to_string()))
     };
     ($fmt:expr, $($arg:tt)*) => {
-        Err($crate::error::Error::Protocol(format!($fmt, $($arg)*)))
+        Err($crate::core::error::Error::Protocol(format!($fmt, $($arg)*)))
     };
 }
 
@@ -196,7 +196,7 @@ macro_rules! protocol_err {
 #[macro_export]
 macro_rules! crypto_err {
     ($err:expr) => {
-        Err($crate::error::Error::Crypto($err))
+        Err($crate::core::error::Error::Crypto($err))
     };
 }
 
@@ -204,7 +204,7 @@ macro_rules! crypto_err {
 #[macro_export]
 macro_rules! auth_err {
     ($err:expr) => {
-        Err($crate::error::Error::Authentication($err))
+        Err($crate::core::error::Error::Authentication($err))
     };
 }
 
@@ -212,7 +212,7 @@ macro_rules! auth_err {
 #[macro_export]
 macro_rules! key_exchange_err {
     ($err:expr) => {
-        Err($crate::error::Error::KeyExchange($err))
+        Err($crate::core::error::Error::KeyExchange($err))
     };
 }
 
@@ -220,7 +220,7 @@ macro_rules! key_exchange_err {
 #[macro_export]
 macro_rules! invalid_state_err {
     ($expected:expr, $actual:expr) => {
-        Err($crate::error::Error::InvalidState {
+        Err($crate::core::error::Error::InvalidState {
             expected: $expected.to_string(),
             actual: $actual.to_string(),
         })

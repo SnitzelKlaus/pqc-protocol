@@ -5,7 +5,7 @@ This module provides functions for symmetric encryption and decryption
 using ChaCha20-Poly1305.
 */
 
-use crate::{
+use crate::core::{
     constants::sizes,
     error::{Result, Error, CryptoError},
     message::types::MessageType,

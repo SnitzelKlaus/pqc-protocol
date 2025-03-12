@@ -5,7 +5,7 @@ This module provides functions for performing the key exchange phase
 of the protocol using Kyber.
 */
 
-use crate::{
+use crate::core::{
     constants::{sizes, HKDF_SALT, HKDF_INFO_CHACHA},
     error::{Result, Error, CryptoError},
 };

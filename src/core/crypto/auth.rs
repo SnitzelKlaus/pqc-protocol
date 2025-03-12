@@ -5,8 +5,8 @@ This module provides functions for digital signatures and verification
 using Dilithium.
 */
 
-use crate::error::{Result, Error};
-use crate::error::AuthError;
+use crate::core::error::{Result, Error};
+use crate::core::error::AuthError;
 
 use pqcrypto_dilithium::{
     dilithium3,

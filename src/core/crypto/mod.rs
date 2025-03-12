@@ -15,6 +15,19 @@ pub mod auth;
 pub mod cipher;
 
 // Re-export frequently used types
-pub use key_exchange::{KyberPublicKey, KyberSecretKey, KyberCiphertext};
-pub use auth::{DilithiumPublicKey, DilithiumSecretKey, DilithiumSignature};
+
+// Kyber types
+pub use pqcrypto_kyber::kyber768::{
+    PublicKey as KyberPublicKey,
+    SecretKey as KyberSecretKey,
+    Ciphertext as KyberCiphertext
+};
+
+// Dilithium types
+pub use pqcrypto_dilithium::dilithium3::{
+    PublicKey as DilithiumPublicKey,
+    SecretKey as DilithiumSecretKey,
+    DetachedSignature as DilithiumSignature
+};
+
 pub use cipher::Cipher;
