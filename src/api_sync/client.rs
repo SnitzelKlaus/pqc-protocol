@@ -50,10 +50,7 @@ impl PqcClient {
             })?;
         
         // Process the ciphertext
-        match self.session.process_key_exchange(&ct) {
-            Ok(_) => {},
-            Err(e) => return Err(e),
-        }
+        self.session.process_key_exchange(&ct)?;
         
         // Return the verification key
         Ok(self.session.local_verification_key().as_bytes().to_vec())
@@ -73,10 +70,7 @@ impl PqcClient {
         self.session.set_remote_verification_key(vk)?;
         
         // Complete authentication
-        match self.session.complete_authentication() {
-            Ok(_) => {},
-            Err(e) => return Err(e),
-        }
+        self.session.complete_authentication()?;
         
         Ok(())
     }

@@ -36,8 +36,10 @@ impl<'a> PqcSyncStreamSender<'a> {
     ///
     /// Takes a byte slice and returns an iterator that yields encrypted
     /// chunks of data ready to be sent.
-    pub fn stream_data(self, data: &'a [u8]) -> impl Iterator<Item = Result<Vec<u8>>> + 'a {
-        data.chunks(self.chunk_size)
+    pub fn stream_data<'b>(&'a mut self, data: &'b [u8]) -> impl Iterator<Item = Result<Vec<u8>>> + 'a 
+    where 'b: 'a {
+        let chunk_size = self.chunk_size;
+        data.chunks(chunk_size)
             .map(move |chunk| self.session.encrypt_and_sign(chunk))
     }
     
@@ -45,11 +47,11 @@ impl<'a> PqcSyncStreamSender<'a> {
     ///
     /// Takes a reader and processes its content in chunks, returning an
     /// iterator that yields encrypted chunks ready to be sent.
-    pub fn stream_reader<R: Read>(
-        &mut self,
-        reader: &mut R,
-        buffer: &mut [u8],
-    ) -> StreamIterator<'_, R> {
+    pub fn stream_reader<'b, R: Read + 'b>(
+        &'a mut self,
+        reader: &'b mut R,
+        buffer: &'b mut [u8],
+    ) -> StreamIterator<'a, 'b, R> {
         StreamIterator {
             sender: self,
             reader,
@@ -100,21 +102,21 @@ impl<'a> PqcSyncStreamSender<'a> {
 }
 
 /// Iterator for streaming from a reader
-pub struct StreamIterator<'a, R: Read> {
+pub struct StreamIterator<'a, 'b, R: Read> {
     /// Reference to the PQC stream sender
     pub(crate) sender: &'a mut PqcSyncStreamSender<'a>,
     
     /// Reader to stream from
-    pub(crate) reader: &'a mut R,
+    pub(crate) reader: &'b mut R,
     
     /// Buffer for reading chunks
-    pub(crate) buffer: &'a mut [u8],
+    pub(crate) buffer: &'b mut [u8],
     
     /// Whether the stream is finished
     pub(crate) finished: bool,
 }
 
-impl<'a, R: Read> Iterator for StreamIterator<'a, R> {
+impl<'a, 'b, R: Read> Iterator for StreamIterator<'a, 'b, R> {
     type Item = Result<Vec<u8>>;
     
     fn next(&mut self) -> Option<Self::Item> {
@@ -413,7 +415,7 @@ mod tests {
         let data = vec![0u8; 100000]; // 100KB
         
         // Stream with chunks of 10KB
-        let sender = PqcSyncStreamSender::new(&mut client, Some(10000));
+        let mut sender = PqcSyncStreamSender::new(&mut client, Some(10000));
         let mut receiver = PqcSyncStreamReceiver::with_reassembly(&mut server);
         
         // Process all chunks

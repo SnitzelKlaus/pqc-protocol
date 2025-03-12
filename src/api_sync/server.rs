@@ -7,7 +7,6 @@ This module provides the server-side operations for the synchronous API.
 use crate::{
     error::{Result, Error},
     session::{PqcSession, Role, SessionState},
-    streaming::{PqcStreamSender, PqcStreamReceiver},
     security::rotation::PqcSessionKeyRotation,
     constants::MAX_CHUNK_SIZE,
 };
