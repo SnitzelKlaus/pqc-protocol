@@ -31,10 +31,12 @@ pub mod bindings;
 pub mod serde;
 
 // Re-export commonly used types for convenience
-pub use core::error::{Error, Result};
-pub use core::message::{types::MessageType, format::MessageHeader};
-pub use core::session::{state::SessionState, state::Role};
-pub use core::constants::VERSION;
+pub use core::error::{Error, Result, AuthError, CryptoError, KeyExchangeError};
+pub use core::message::{MessageType, MessageHeader, MessageBuilder, MessageParser};
+pub use core::session::{SessionState, Role, PqcSession};
+pub use core::constants::{VERSION, MAX_CHUNK_SIZE, sizes};
+pub use core::crypto::{KyberPublicKey, KyberSecretKey, KyberCiphertext, DilithiumPublicKey, DilithiumSecretKey, DilithiumSignature};
+pub use core::security::rotation::PqcSessionKeyRotation;
 
 // Re-export synchronous API components for ease of use
 pub mod sync {

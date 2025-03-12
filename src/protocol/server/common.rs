@@ -12,7 +12,6 @@ use crate::core::{
 // Import the necessary traits to access their methods
 use pqcrypto_traits::kem::{PublicKey, Ciphertext};
 use pqcrypto_traits::sign::PublicKey as SignPublicKey;
-use crate::core::security::rotation::PqcSessionKeyRotation;
 
 /// Accept a connection by processing the client's public key.
 /// Returns the ciphertext and local verification key as byte vectors.
@@ -37,20 +36,12 @@ pub fn authenticate(session: &mut PqcSession, client_verification_key: &[u8]) ->
 
 /// Encrypt and sign data for sending.
 pub fn send(session: &mut PqcSession, data: &[u8]) -> Result<Vec<u8>> {
-    let result = session.encrypt_and_sign(data)?;
-    if session.should_rotate_keys() {
-        session.track_sent(result.len());
-    }
-    Ok(result)
+    session.encrypt_and_sign(data)
 }
 
 /// Verify and decrypt the received data.
 pub fn receive(session: &mut PqcSession, encrypted: &[u8]) -> Result<Vec<u8>> {
-    let result = session.verify_and_decrypt(encrypted)?;
-    if session.should_rotate_keys() {
-        session.track_received(encrypted.len());
-    }
-    Ok(result)
+    session.verify_and_decrypt(encrypted)
 }
 
 /// Close the session and return the closing message.

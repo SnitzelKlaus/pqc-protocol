@@ -4,14 +4,13 @@ This module factors out the common operations performed on a PqcSession.
 */
 
 use crate::core::{
-    error::Result,
+    error::{Result, Error, CryptoError, AuthError},
     session::PqcSession,
 };
 
 // Import the necessary traits to access their methods
 use pqcrypto_traits::kem::{PublicKey, Ciphertext};
 use pqcrypto_traits::sign::PublicKey as SignPublicKey;
-use crate::core::security::rotation::PqcSessionKeyRotation;
 
 /// Initiate key exchange and return public key bytes.
 pub fn connect(session: &mut PqcSession) -> Result<Vec<u8>> {
@@ -21,8 +20,6 @@ pub fn connect(session: &mut PqcSession) -> Result<Vec<u8>> {
 
 /// Process the server's response ciphertext and return the verification key bytes.
 pub fn process_response(session: &mut PqcSession, ciphertext: &[u8]) -> Result<Vec<u8>> {
-    use crate::core::error::{Error, CryptoError};
-    
     let ct = pqcrypto_kyber::kyber768::Ciphertext::from_bytes(ciphertext)
         .map_err(|_| Error::Crypto(CryptoError::InvalidKeyFormat))?;
     session.process_key_exchange(&ct)?;
@@ -31,8 +28,6 @@ pub fn process_response(session: &mut PqcSession, ciphertext: &[u8]) -> Result<V
 
 /// Complete authentication using the server's verification key.
 pub fn authenticate(session: &mut PqcSession, server_verification_key: &[u8]) -> Result<()> {
-    use crate::core::error::{Error, AuthError};
-    
     let vk = pqcrypto_dilithium::dilithium3::PublicKey::from_bytes(server_verification_key)
         .map_err(|_| Error::Authentication(AuthError::InvalidKeyFormat))?;
     session.set_remote_verification_key(vk)?;
@@ -42,20 +37,12 @@ pub fn authenticate(session: &mut PqcSession, server_verification_key: &[u8]) ->
 
 /// Encrypt and sign data for sending.
 pub fn send(session: &mut PqcSession, data: &[u8]) -> Result<Vec<u8>> {
-    let result = session.encrypt_and_sign(data)?;
-    if session.should_rotate_keys() {
-        session.track_sent(result.len());
-    }
-    Ok(result)
+    session.encrypt_and_sign(data)
 }
 
 /// Verify and decrypt the received data.
 pub fn receive(session: &mut PqcSession, encrypted: &[u8]) -> Result<Vec<u8>> {
-    let result = session.verify_and_decrypt(encrypted)?;
-    if session.should_rotate_keys() {
-        session.track_received(encrypted.len());
-    }
-    Ok(result)
+    session.verify_and_decrypt(encrypted)
 }
 
 /// Close the session and return the closing message.

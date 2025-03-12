@@ -57,6 +57,11 @@ impl Cipher {
         
         *GenericArray::from_slice(&nonce)
     }
+
+    /// Check if the cipher is initialized
+    pub fn is_initialized(&self) -> bool {
+        true  // If we have a Cipher instance, it's already initialized with a key
+    }
 }
 
 #[cfg(test)]
