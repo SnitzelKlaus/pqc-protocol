@@ -418,15 +418,21 @@ mod tests {
         let mut sender = reader.pqc_encrypt(&mut client, Some(16));
         assert_eq!(sender.chunk_size(), 16);
         let mut output = Vec::new();
-        let mut writer_receiver = output.pqc_decrypt(&mut server, true);
-        let mut buffer = [0u8; 16];
-        for encrypted in sender.stream_reader(&mut std::io::Cursor::new(&data), &mut buffer) {
-            let encrypted = encrypted?;
-            writer_receiver.process_chunk(&encrypted)?;
-        }
+        
+        {
+            // The mutable borrow of `output` via writer_receiver is limited to this block.
+            let mut writer_receiver = output.pqc_decrypt(&mut server, true);
+            let mut buffer = [0u8; 16];
+            for encrypted in sender.stream_reader(&mut std::io::Cursor::new(&data), &mut buffer) {
+                let encrypted = encrypted?;
+                writer_receiver.process_chunk(&encrypted)?;
+            }
+            let reassembled = writer_receiver.reassembled_data().unwrap();
+            assert_eq!(reassembled, &data[..]);
+        } // writer_receiver goes out of scope here, ending its mutable borrow of `output`
+        
+        // Now it's safe to immutably borrow `output`.
         assert_eq!(output, data);
-        let reassembled = writer_receiver.reassembled_data().unwrap();
-        assert_eq!(reassembled, &data[..]);
         Ok(())
     }
 }

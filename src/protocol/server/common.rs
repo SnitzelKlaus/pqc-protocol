@@ -10,8 +10,8 @@ use crate::core::{
 };
 
 // Import the necessary traits to access their methods
-use pqcrypto_traits::kem::{SharedSecret, PublicKey};
-use pqcrypto_traits::sign::DetachedSignature;
+use pqcrypto_traits::kem::{PublicKey, Ciphertext};
+use pqcrypto_traits::sign::PublicKey as SignPublicKey;
 use crate::core::security::rotation::PqcSessionKeyRotation;
 
 /// Accept a connection by processing the client's public key.

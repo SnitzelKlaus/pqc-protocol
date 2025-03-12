@@ -64,26 +64,6 @@ wasm = [
 [lib]
 crate-type = ["cdylib", "rlib"]
 
-[[example]]
-name = "client"
-path = "examples/client.rs"
-required-features = ["std"]
-
-[[example]]
-name = "server"
-path = "examples/server.rs"
-required-features = ["std"]
-
-[[example]]
-name = "simple_chat"
-path = "examples/simple_chat.rs"
-required-features = ["std"]
-
-[[example]]
-name = "file_transfer"
-path = "examples/file_transfer.rs"
-required-features = ["std"]
-
 [profile.release]
 lto = true
 codegen-units = 1

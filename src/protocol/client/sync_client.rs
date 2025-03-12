@@ -61,9 +61,11 @@ impl PqcClient {
         &'a mut self,
         data: &'a [u8],
         chunk_size: Option<usize>,
-    ) -> impl Iterator<Item = Result<Vec<u8>>> + 'a {
+    ) -> Result<Vec<Result<Vec<u8>>>> {
         let chunk_size = chunk_size.unwrap_or(MAX_CHUNK_SIZE);
-        PqcSyncStreamSender::new(&mut self.session, Some(chunk_size)).stream_data(data)
+        let mut sender = PqcSyncStreamSender::new(&mut self.session, Some(chunk_size));
+        let chunks: Vec<Result<Vec<u8>>> = sender.stream_data(data).collect();
+        Ok(chunks)
     }
     
     /// Create a stream sender for efficiently streaming data.
