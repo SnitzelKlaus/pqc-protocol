@@ -8,15 +8,8 @@ to maintain forward secrecy and security.
 use std::time::{Duration, Instant};
 
 use crate::{
-    error::{Result, Error},
+    error::Result,
     session::PqcSession,
-    crypto::{
-        KeyExchange, Cipher, Authentication,
-        KyberPublicKey, KyberSecretKey, KyberCiphertext,
-    },
-    message::{
-        MessageType, MessageBuilder, MessageParser,
-    },
 };
 
 /// Parameters for key rotation
@@ -54,31 +47,41 @@ impl Default for KeyRotationParams {
 }
 
 /// Session stats for key rotation decisions
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct SessionStats {
     /// When the current keys were established
     pub last_rotation: Instant,
-    
+
     /// Number of messages sent with current keys
     pub messages_sent: u32,
-    
+
     /// Number of bytes sent with current keys
     pub bytes_sent: u64,
-    
+
     /// Number of messages received with current keys
     pub messages_received: u32,
-    
+
     /// Number of bytes received with current keys
     pub bytes_received: u64,
+}
+
+impl Default for SessionStats {
+    fn default() -> Self {
+        Self {
+            last_rotation: Instant::now(),
+            messages_sent: 0,
+            bytes_sent: 0,
+            messages_received: 0,
+            bytes_received: 0,
+        }
+    }
 }
 
 impl SessionStats {
     /// Create new session stats initialized with current time
     pub fn new() -> Self {
-        Self {
-            last_rotation: Instant::now(),
-            ..Default::default()
-        }
+        // You can call `Self::default()`, or construct it directly:
+        Self::default()
     }
     
     /// Reset stats for a new rotation

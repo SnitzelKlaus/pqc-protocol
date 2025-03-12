@@ -5,9 +5,8 @@ This module provides the client-side operations for the synchronous API.
 */
 
 use crate::{
-    error::{Result, Error},
+    error::Result,
     session::{PqcSession, Role, SessionState},
-    streaming::{PqcStreamSender, PqcStreamReceiver},
     security::rotation::PqcSessionKeyRotation,
     constants::MAX_CHUNK_SIZE,
 };
@@ -16,7 +15,7 @@ use crate::{
 use pqcrypto_traits::kem::{PublicKey as KemPublicKey, Ciphertext as KemCiphertext};
 use pqcrypto_traits::sign::PublicKey as SignPublicKey;
 
-use super::stream::{PqcSyncStreamSender, PqcSyncStreamReceiver, StreamIterator};
+use super::stream::{PqcSyncStreamSender, PqcSyncStreamReceiver};
 
 /// Client-side operations for the PQC protocol
 pub struct PqcClient {
@@ -51,7 +50,10 @@ impl PqcClient {
             })?;
         
         // Process the ciphertext
-        self.session.process_key_exchange(&ct)?;
+        match self.session.process_key_exchange(&ct) {
+            Ok(_) => {},
+            Err(e) => return Err(e),
+        }
         
         // Return the verification key
         Ok(self.session.local_verification_key().as_bytes().to_vec())
@@ -71,7 +73,10 @@ impl PqcClient {
         self.session.set_remote_verification_key(vk)?;
         
         // Complete authentication
-        self.session.complete_authentication()?;
+        match self.session.complete_authentication() {
+            Ok(_) => {},
+            Err(e) => return Err(e),
+        }
         
         Ok(())
     }
