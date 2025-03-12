@@ -19,9 +19,6 @@ pub mod memory;
 // Export security utilities
 pub mod security;
 
-// Export streaming components
-pub mod streaming;
-
 // Protocol constants
 pub mod constants;
 
