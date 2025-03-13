@@ -36,9 +36,20 @@ impl SecureMemoryManager {
         let manager = Self {
             level,
             auto_erase: true,
+            #[cfg(feature = "memory-lock")]
             memory_locking: AtomicBool::new(true),
+            #[cfg(not(feature = "memory-lock"))]
+            memory_locking: AtomicBool::new(false),
+            
+            #[cfg(feature = "memory-canary")]
             canary_protection: AtomicBool::new(true),
+            #[cfg(not(feature = "memory-canary"))]
+            canary_protection: AtomicBool::new(false),
+            
+            #[cfg(feature = "memory-zero")]
             zero_on_free: AtomicBool::new(true),
+            #[cfg(not(feature = "memory-zero"))]
+            zero_on_free: AtomicBool::new(false),
         };
         
         manager
@@ -185,6 +196,8 @@ mod tests {
         
         // Test creating secure memory through the manager
         let secure_mem = memory_manager.secure_memory([0u8; 32]);
+        
+        #[cfg(feature = "memory-lock")]
         assert!(secure_mem.is_locked());
         
         // Test creating secure vector through the manager
@@ -192,8 +205,13 @@ mod tests {
         assert_eq!(secure_vec[0], 1);
         
         // Test security settings
+        #[cfg(feature = "memory-lock")]
         assert!(memory_manager.is_memory_locking_enabled());
+        
+        #[cfg(feature = "memory-canary")]
         assert!(memory_manager.is_canary_protection_enabled());
+        
+        #[cfg(feature = "memory-zero")]
         assert!(memory_manager.is_zero_on_free_enabled());
         
         // Test security level
@@ -206,31 +224,29 @@ mod tests {
         
         // Test default settings
         assert_eq!(manager.security_level(), MemorySecurity::Standard);
-        assert!(manager.is_memory_locking_enabled());
-        assert!(manager.is_canary_protection_enabled());
-        assert!(manager.is_zero_on_free_enabled());
+        
+        #[cfg(feature = "memory-lock")]
+        {
+            assert!(manager.is_memory_locking_enabled());
+            manager.disable_memory_locking();
+            assert!(!manager.is_memory_locking_enabled());
+            manager.enable_memory_locking();
+            assert!(manager.is_memory_locking_enabled());
+        }
+        
+        #[cfg(feature = "memory-canary")]
+        {
+            assert!(manager.is_canary_protection_enabled());
+            manager.disable_canary_protection();
+            assert!(!manager.is_canary_protection_enabled());
+            manager.enable_canary_protection();
+            assert!(manager.is_canary_protection_enabled());
+        }
+        
         assert!(manager.is_auto_erase_enabled());
-        
-        // Change settings
-        manager.set_security_level(MemorySecurity::Maximum);
-        manager.disable_memory_locking();
-        manager.disable_canary_protection();
         manager.disable_auto_erase();
-        
-        // Verify changes
-        assert_eq!(manager.security_level(), MemorySecurity::Maximum);
-        assert!(!manager.is_memory_locking_enabled());
-        assert!(!manager.is_canary_protection_enabled());
         assert!(!manager.is_auto_erase_enabled());
-        
-        // Re-enable features
-        manager.enable_memory_locking();
-        manager.enable_canary_protection();
         manager.enable_auto_erase();
-        
-        // Verify re-enabled
-        assert!(manager.is_memory_locking_enabled());
-        assert!(manager.is_canary_protection_enabled());
         assert!(manager.is_auto_erase_enabled());
     }
     

@@ -56,17 +56,26 @@ proptest = "1.6.0"
 criterion = "0.5.1"
 
 [features]
-default = ["std"]
+# Core features
+default = ["std", "secure-memory", "memory-zero"]
 std = []
 async = ["tokio"]
 serde-support = ["dep:serde", "dep:serde_json", "dep:bincode"]
 ffi = ["libc"]
-wasm = [
-    "wasm-bindgen", 
-    "js-sys", 
-    "web-sys", 
-    "console_error_panic_hook"
-]
+
+# Memory security features
+secure-memory = ["memory-canary", "memory-lock", "memory-zero"]
+memory-canary = []      # Buffer overflow detection via canary values
+memory-lock = []        # Prevent memory from being swapped to disk
+memory-zero = []        # Zero memory when it's freed
+memory-enhanced = []    # Enhanced memory protection with read-only when not in use
+
+# Platform compatibility
+wasm-compat = ["wasm-bindgen", "js-sys", "web-sys", "console_error_panic_hook"]
+embedded-compat = []
+windows-compat = []
+
+# PQC algorithm variants
 kyber512 = []
 kyber1024 = []
 dilithium2 = []

@@ -96,13 +96,16 @@ impl<T> SecureMemory<T> {
             }
             
             // Write canary values at the end of each padding area
-            let front_canary_ptr = allocation.add(padding_size - 8) as *mut u64;
-            let back_canary_ptr = allocation.add(padding_size + size) as *mut u64;
-            ptr::write_volatile(front_canary_ptr, canary);
-            ptr::write_volatile(back_canary_ptr, canary);
+            #[cfg(feature = "memory-canary")]
+            {
+                let front_canary_ptr = allocation.add(padding_size - 8) as *mut u64;
+                let back_canary_ptr = allocation.add(padding_size + size) as *mut u64;
+                ptr::write_volatile(front_canary_ptr, canary);
+                ptr::write_volatile(back_canary_ptr, canary);
+            }
             
             // Lock memory to prevent swapping (platform-specific)
-            #[cfg(unix)]
+            #[cfg(all(unix, feature = "memory-lock"))]
             {
                 use libc::{mlock, ENOMEM, MCL_CURRENT, MCL_FUTURE, mlockall};
                 
@@ -123,7 +126,7 @@ impl<T> SecureMemory<T> {
                 }
             }
             
-            #[cfg(all(target_os = "windows", feature = "windows-lock"))]
+            #[cfg(all(target_os = "windows", feature = "memory-lock", feature = "windows-compat"))]
             {
                 use winapi::um::memoryapi::VirtualLock;
                 use winapi::um::errhandlingapi::GetLastError;
@@ -181,7 +184,9 @@ impl<T> SecureMemory<T> {
     
     /// Explicitly clear memory using a secure zeroization method
     pub fn clear(&mut self) {
+        #[cfg(feature = "memory-canary")]
         self.check_canary_values();
+        
         self.zeroize();
     }
     
@@ -209,12 +214,14 @@ impl<T> SecureMemory<T> {
         (self.inner as *mut u8).sub(self.padding_size)
     }
     
+    #[cfg(feature = "memory-canary")]
     /// Get the front canary value
     unsafe fn front_canary(&self) -> u64 {
         let front_canary_ptr = self.allocation_base().add(self.padding_size - 8) as *const u64;
         ptr::read_volatile(front_canary_ptr)
     }
     
+    #[cfg(feature = "memory-canary")]
     /// Get the back canary value
     unsafe fn back_canary(&self) -> u64 {
         let size = mem::size_of::<T>();
@@ -223,6 +230,7 @@ impl<T> SecureMemory<T> {
     }
     
     /// Check canary values for buffer overflow detection
+    #[cfg(feature = "memory-canary")]
     pub fn check_canary_values(&self) -> bool {
         unsafe {
             let front_canary = self.front_canary();
@@ -245,6 +253,13 @@ impl<T> SecureMemory<T> {
             
             true
         }
+    }
+    
+    /// Check canary values for buffer overflow detection (no-op if canary feature disabled)
+    #[cfg(not(feature = "memory-canary"))]
+    pub fn check_canary_values(&self) -> bool {
+        // Always return true when canary feature is disabled
+        true
     }
     
     /// Compare two secure memory containers in constant time
@@ -275,7 +290,9 @@ impl<T> SecureMemory<T> {
     where 
         T: Clone
     {
+        #[cfg(feature = "memory-canary")]
         self.check_canary_values();
+        
         unsafe {
             // Clone the inner value
             let cloned = (*self.inner).clone();
@@ -288,14 +305,18 @@ impl<T: ?Sized> Deref for SecureMemory<T> {
     type Target = T;
     
     fn deref(&self) -> &Self::Target {
+        #[cfg(feature = "memory-canary")]
         self.check_canary_values();
+        
         unsafe { &*self.inner }
     }
 }
 
 impl<T: ?Sized> DerefMut for SecureMemory<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
+        #[cfg(feature = "memory-canary")]
         self.check_canary_values();
+        
         unsafe { &mut *self.inner }
     }
 }
@@ -303,12 +324,14 @@ impl<T: ?Sized> DerefMut for SecureMemory<T> {
 impl<T: ?Sized> Drop for SecureMemory<T> {
     fn drop(&mut self) {
         // Check for buffer overflows before deallocation
+        #[cfg(feature = "memory-canary")]
         let overflow_detected = !self.check_canary_values();
         
-        // Get the size of the stored value
-        let size = mem::size_of_val(&**self);
+        #[cfg(not(feature = "memory-canary"))]
+        let overflow_detected = false;
         
-        // Zero the memory
+        // Zero the memory if the feature is enabled
+        #[cfg(feature = "memory-zero")]
         self.zeroize();
         
         unsafe {
@@ -316,17 +339,20 @@ impl<T: ?Sized> Drop for SecureMemory<T> {
             let allocation = self.allocation_base();
             let total_size = self.layout.size();
             
-            // Zero all memory, including padding
-            ptr::write_bytes(allocation, 0, total_size);
+            #[cfg(feature = "memory-zero")]
+            {
+                // Zero all memory, including padding
+                ptr::write_bytes(allocation, 0, total_size);
+            }
             
             // Unlock memory if it was locked
             if self.locked.load(Ordering::Relaxed) {
-                #[cfg(unix)]
+                #[cfg(all(unix, feature = "memory-lock"))]
                 {
                     libc::munlock(allocation as *const _, total_size);
                 }
                 
-                #[cfg(all(target_os = "windows", feature = "windows-lock"))]
+                #[cfg(all(target_os = "windows", feature = "memory-lock", feature = "windows-compat"))]
                 {
                     use winapi::um::memoryapi::VirtualUnlock;
                     VirtualUnlock(allocation as *mut _, total_size);
@@ -339,7 +365,8 @@ impl<T: ?Sized> Drop for SecureMemory<T> {
         
         // If an overflow was detected, we might want to abort the program
         // in a production environment to prevent further exploitation
-        if overflow_detected && cfg!(feature = "abort-on-overflow") {
+        #[cfg(all(feature = "memory-canary", feature = "secure-memory"))]
+        if overflow_detected {
             eprintln!("FATAL: SecureMemory buffer overflow detected. Aborting.");
             std::process::abort();
         }
@@ -439,6 +466,7 @@ mod tests {
         }
     }
     
+    #[cfg(feature = "memory-canary")]
     #[test]
     fn test_secure_memory_canary() {
         let secure = SecureMemory::new([0u8; 32]);

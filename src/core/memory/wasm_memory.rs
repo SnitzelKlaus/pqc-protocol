@@ -5,13 +5,13 @@ This module provides memory management utilities specifically for
 WebAssembly targets with their unique constraints.
 */
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "wasm-compat"))]
 use super::secure_memory_manager::SecureMemoryManager;
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "wasm-compat"))]
 use super::memory_security::MemorySecurity;
 
 /// WASM-specific version of the memory manager
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "wasm-compat"))]
 pub struct WasmMemoryManager {
     /// Base memory manager
     inner: SecureMemoryManager,
@@ -19,7 +19,7 @@ pub struct WasmMemoryManager {
     has_secure_random: bool,
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "wasm-compat"))]
 impl WasmMemoryManager {
     /// Create a new WASM-specific memory manager
     pub fn new() -> Self {
@@ -48,14 +48,14 @@ impl WasmMemoryManager {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "wasm-compat"))]
 impl Default for WasmMemoryManager {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(all(target_arch = "wasm32", test))]
+#[cfg(all(target_arch = "wasm32", feature = "wasm-compat", test))]
 mod tests {
     use super::*;
     

@@ -13,8 +13,8 @@ use super::zeroize::Zeroize;
 
 /// Advanced secure memory container with additional protection mechanisms.
 /// This version uses mprotect/VirtualProtect to create read-only pages when not in use.
-/// Available with the "enhanced-memory" feature
-#[cfg(feature = "enhanced-memory")]
+/// Available with the "memory-enhanced" feature
+#[cfg(feature = "memory-enhanced")]
 pub struct EnhancedSecureMemory<T: Sized> {
     /// The secure memory container
     memory: SecureMemory<T>,
@@ -24,7 +24,7 @@ pub struct EnhancedSecureMemory<T: Sized> {
     page_size: usize,
 }
 
-#[cfg(all(feature = "enhanced-memory", unix))]
+#[cfg(all(feature = "memory-enhanced", unix))]
 impl<T: Sized> EnhancedSecureMemory<T> {
     /// Create a new enhanced secure memory container
     pub fn new(value: T) -> Self {
@@ -119,7 +119,7 @@ impl<T: Sized> EnhancedSecureMemory<T> {
 }
 
 /// Implementation for Windows systems with enhanced memory protection
-#[cfg(all(feature = "enhanced-memory", target_os = "windows"))]
+#[cfg(all(feature = "memory-enhanced", target_os = "windows", feature = "windows-compat"))]
 impl<T: Sized> EnhancedSecureMemory<T> {
     /// Create a new enhanced secure memory container
     pub fn new(value: T) -> Self {
@@ -231,7 +231,7 @@ impl<T: Sized> EnhancedSecureMemory<T> {
 
 /// Implementation for WebAssembly targets
 /// In WASM, we can't do traditional memory locking, but we provide a compatible API
-#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
+#[cfg(all(feature = "memory-enhanced", feature = "wasm-compat"))]
 impl<T: Sized> EnhancedSecureMemory<T> {
     /// Create a new enhanced secure memory container
     pub fn new(value: T) -> Self {
@@ -273,14 +273,14 @@ impl<T: Sized> EnhancedSecureMemory<T> {
 }
 
 // Implement common traits for EnhancedSecureMemory regardless of platform
-#[cfg(feature = "enhanced-memory")]
+#[cfg(feature = "memory-enhanced")]
 impl<T: Sized + Default> Default for EnhancedSecureMemory<T> {
     fn default() -> Self {
         Self::new(T::default())
     }
 }
 
-#[cfg(feature = "enhanced-memory")]
+#[cfg(feature = "memory-enhanced")]
 impl<T: Sized> Deref for EnhancedSecureMemory<T> {
     type Target = T;
     
@@ -289,7 +289,7 @@ impl<T: Sized> Deref for EnhancedSecureMemory<T> {
     }
 }
 
-#[cfg(feature = "enhanced-memory")]
+#[cfg(feature = "memory-enhanced")]
 impl<T: Sized> DerefMut for EnhancedSecureMemory<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         // Ensure memory is writable before mutating
@@ -298,7 +298,7 @@ impl<T: Sized> DerefMut for EnhancedSecureMemory<T> {
     }
 }
 
-#[cfg(feature = "enhanced-memory")]
+#[cfg(feature = "memory-enhanced")]
 impl<T: Sized> Drop for EnhancedSecureMemory<T> {
     fn drop(&mut self) {
         // Make memory writable for proper cleanup
@@ -307,7 +307,7 @@ impl<T: Sized> Drop for EnhancedSecureMemory<T> {
     }
 }
 
-#[cfg(feature = "enhanced-memory")]
+#[cfg(feature = "memory-enhanced")]
 impl<T: Sized> Zeroize for EnhancedSecureMemory<T> {
     fn zeroize(&mut self) {
         // Ensure memory is writable before zeroizing
@@ -316,8 +316,7 @@ impl<T: Sized> Zeroize for EnhancedSecureMemory<T> {
     }
 }
 
-#[cfg(feature = "enhanced-memory")]
-#[cfg(test)]
+#[cfg(all(test, feature = "memory-enhanced"))]
 mod tests {
     use super::*;
     
