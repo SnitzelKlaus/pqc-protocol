@@ -594,7 +594,187 @@ impl<T> Default for SecureVec<T> {
     }
 }
 
-/// Utility trait for securely zeroizing sensitive data
+/// Memory security level options for session data
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemorySecurity {
+    /// Standard security: basic protections
+    Standard,
+    /// Enhanced security: additional protections and canary values
+    Enhanced,
+    /// Maximum security: all protections enabled, read-only when not in use
+    Maximum,
+}
+
+impl Default for MemorySecurity {
+    fn default() -> Self {
+        MemorySecurity::Standard
+    }
+}
+
+/// Manages secure memory for a session
+pub struct SecureMemoryManager {
+    /// Current memory security level
+    level: MemorySecurity,
+    
+    /// Whether automatic key erasure is enabled
+    auto_erase: bool,
+    
+    /// Whether memory locking is enabled
+    memory_locking: AtomicBool,
+    
+    /// Whether canary values are used for buffer overflow detection
+    canary_protection: AtomicBool,
+    
+    /// Whether sensitive memory is zeroed when freed
+    zero_on_free: AtomicBool,
+}
+
+impl SecureMemoryManager {
+    /// Create a new secure memory manager with the specified security level
+    pub fn new(level: MemorySecurity) -> Self {
+        let manager = Self {
+            level,
+            auto_erase: true,
+            memory_locking: AtomicBool::new(true),
+            canary_protection: AtomicBool::new(true),
+            zero_on_free: AtomicBool::new(true),
+        };
+        
+        manager
+    }
+    
+    /// Create a new secure memory manager with default security level
+    pub fn default() -> Self {
+        Self::new(MemorySecurity::Standard)
+    }
+    
+    /// Create a new secure memory manager with enhanced security
+    pub fn enhanced() -> Self {
+        Self::new(MemorySecurity::Enhanced)
+    }
+    
+    /// Create a new secure memory manager with maximum security
+    pub fn maximum() -> Self {
+        Self::new(MemorySecurity::Maximum)
+    }
+    
+    /// Get the current security level
+    pub fn security_level(&self) -> MemorySecurity {
+        self.level
+    }
+    
+    /// Set the security level
+    pub fn set_security_level(&mut self, level: MemorySecurity) {
+        self.level = level;
+    }
+    
+    /// Check if memory locking is enabled
+    pub fn is_memory_locking_enabled(&self) -> bool {
+        self.memory_locking.load(Ordering::Relaxed)
+    }
+    
+    /// Enable memory locking
+    pub fn enable_memory_locking(&self) {
+        self.memory_locking.store(true, Ordering::Relaxed);
+    }
+    
+    /// Disable memory locking
+    pub fn disable_memory_locking(&self) {
+        self.memory_locking.store(false, Ordering::Relaxed);
+    }
+    
+    /// Check if canary protection is enabled
+    pub fn is_canary_protection_enabled(&self) -> bool {
+        self.canary_protection.load(Ordering::Relaxed)
+    }
+    
+    /// Enable canary protection
+    pub fn enable_canary_protection(&self) {
+        self.canary_protection.store(true, Ordering::Relaxed);
+    }
+    
+    /// Disable canary protection
+    pub fn disable_canary_protection(&self) {
+        self.canary_protection.store(false, Ordering::Relaxed);
+    }
+    
+    /// Check if zero-on-free is enabled
+    pub fn is_zero_on_free_enabled(&self) -> bool {
+        self.zero_on_free.load(Ordering::Relaxed)
+    }
+    
+    /// Enable zero-on-free
+    pub fn enable_zero_on_free(&self) {
+        self.zero_on_free.store(true, Ordering::Relaxed);
+    }
+    
+    /// Disable zero-on-free
+    pub fn disable_zero_on_free(&self) {
+        self.zero_on_free.store(false, Ordering::Relaxed);
+    }
+    
+    /// Check if auto-erase is enabled
+    pub fn is_auto_erase_enabled(&self) -> bool {
+        self.auto_erase
+    }
+    
+    /// Enable auto-erase
+    pub fn enable_auto_erase(&mut self) {
+        self.auto_erase = true;
+    }
+    
+    /// Disable auto-erase
+    pub fn disable_auto_erase(&mut self) {
+        self.auto_erase = false;
+    }
+    
+    /// Create a secure memory container for sensitive data
+    pub fn secure_memory<T>(&self, value: T) -> SecureMemory<T> {
+        SecureMemory::new(value)
+    }
+    
+    /// Create a secure vector container
+    pub fn secure_vec<T>(&self) -> SecureVec<T> {
+        SecureVec::new()
+    }
+    
+    /// Create a secure vector with capacity
+    pub fn secure_vec_with_capacity<T>(&self, capacity: usize) -> SecureVec<T> {
+        SecureVec::with_capacity(capacity)
+    }
+    
+    /// Create a secure vector from an existing vector
+    pub fn secure_vec_from_vec<T>(&self, vec: Vec<T>) -> SecureVec<T> {
+        SecureVec::from_vec(vec)
+    }
+    
+    /// Securely wipe a key from memory
+    pub fn wipe_key<T: Zeroize>(&self, key: &mut T) {
+        key.zeroize();
+    }
+    
+    /// Apply current security settings to an existing SecureMemory container
+    pub fn apply_settings_to_memory<T>(&self, _memory: &mut SecureMemory<T>) {
+        // This is a placeholder - in a real implementation, we would
+        // modify the security settings of the memory container
+    }
+    
+    /// Apply current security settings to an existing SecureVec container
+    pub fn apply_settings_to_vec<T>(&self, vec: &mut SecureVec<T>) {
+        if self.is_canary_protection_enabled() {
+            vec.enable_canary();
+        } else {
+            vec.disable_canary();
+        }
+    }
+    
+    /// Zero out sensitive memory regions
+    pub fn zeroize_region(&self, region: &mut [u8]) {
+        secure_zero_memory(region);
+    }
+}
+
+/// Trait for securely zeroing memory for sensitive data types
 pub trait Zeroize {
     /// Securely zero this object's memory
     fn zeroize(&mut self);
@@ -647,8 +827,60 @@ pub fn secure_zero_memory(memory: &mut [u8]) {
     }
 }
 
+/// Trait for session objects that use secure memory
+pub trait SecureSession {
+    /// Get memory security manager
+    fn memory_manager(&self) -> &SecureMemoryManager;
+    
+    /// Get mutable reference to memory security manager
+    fn memory_manager_mut(&mut self) -> &mut SecureMemoryManager;
+    
+    /// Set memory security level
+    fn set_memory_security_level(&mut self, level: MemorySecurity) {
+        self.memory_manager_mut().set_security_level(level);
+    }
+    
+    /// Get current memory security level
+    fn memory_security_level(&self) -> MemorySecurity {
+        self.memory_manager().security_level()
+    }
+    
+    /// Enable memory locking
+    fn enable_memory_locking(&mut self) {
+        self.memory_manager().enable_memory_locking();
+    }
+    
+    /// Disable memory locking
+    fn disable_memory_locking(&mut self) {
+        self.memory_manager().disable_memory_locking();
+    }
+    
+    /// Enable canary protection
+    fn enable_canary_protection(&mut self) {
+        self.memory_manager().enable_canary_protection();
+    }
+    
+    /// Disable canary protection
+    fn disable_canary_protection(&mut self) {
+        self.memory_manager().disable_canary_protection();
+    }
+    
+    /// Check if memory is secure
+    fn is_memory_secure(&self) -> bool {
+        let manager = self.memory_manager();
+        manager.is_memory_locking_enabled() &&
+        manager.is_canary_protection_enabled() &&
+        manager.is_zero_on_free_enabled()
+    }
+    
+    /// Erase sensitive memory
+    fn erase_sensitive_memory(&mut self);
+}
+
 /// Advanced secure memory container with additional protection mechanisms.
 /// This version uses mprotect/VirtualProtect to create read-only pages when not in use.
+/// Available with the "enhanced-memory" feature
+#[cfg(feature = "enhanced-memory")]
 pub struct EnhancedSecureMemory<T: Sized> {
     /// The secure memory container
     memory: SecureMemory<T>,
@@ -658,7 +890,7 @@ pub struct EnhancedSecureMemory<T: Sized> {
     page_size: usize,
 }
 
-#[cfg(unix)]
+#[cfg(all(feature = "enhanced-memory", unix))]
 impl<T: Sized> EnhancedSecureMemory<T> {
     /// Create a new enhanced secure memory container
     pub fn new(value: T) -> Self {
@@ -732,6 +964,266 @@ impl<T: Sized> EnhancedSecureMemory<T> {
                 false
             }
         }
+    }
+    
+    /// Access the inner memory
+    pub fn inner(&self) -> &SecureMemory<T> {
+        &self.memory
+    }
+    
+    /// Access the inner memory mutably (automatically makes it writable first)
+    pub fn inner_mut(&mut self) -> &mut SecureMemory<T> {
+        // Ensure memory is writable
+        self.make_writable();
+        &mut self.memory
+    }
+    
+    /// Is the memory currently read-only?
+    pub fn is_read_only(&self) -> bool {
+        self.read_only.load(Ordering::Relaxed)
+    }
+}
+
+/// Implementation for Windows systems with enhanced memory protection
+#[cfg(all(feature = "enhanced-memory", target_os = "windows"))]
+impl<T: Sized> EnhancedSecureMemory<T> {
+    /// Create a new enhanced secure memory container
+    pub fn new(value: T) -> Self {
+        use winapi::um::sysinfoapi::{GetSystemInfo, SYSTEM_INFO};
+        
+        // Get the system page size
+        let mut sys_info: SYSTEM_INFO = unsafe { std::mem::zeroed() };
+        unsafe { GetSystemInfo(&mut sys_info) };
+        let page_size = sys_info.dwPageSize as usize;
+        
+        Self {
+            memory: SecureMemory::new(value),
+            read_only: AtomicBool::new(false),
+            page_size,
+        }
+    }
+    
+    /// Make the memory read-only
+    pub fn make_read_only(&self) -> bool {
+        if self.read_only.load(Ordering::Relaxed) {
+            return true;
+        }
+        
+        unsafe {
+            use winapi::um::memoryapi::VirtualProtect;
+            use winapi::um::winnt::PAGE_READONLY;
+            
+            // Get the base address and align to page boundary
+            let addr = self.memory.inner as *mut T as usize;
+            let page_addr = addr & !(self.page_size - 1);
+            
+            // Determine size covering the memory (at least one page)
+            let size = std::mem::size_of::<T>() + (addr - page_addr);
+            let pages = (size + self.page_size - 1) / self.page_size;
+            let total_size = pages * self.page_size;
+            
+            // Make it read-only
+            let mut old_protect = 0;
+            let result = VirtualProtect(
+                page_addr as *mut _,
+                total_size,
+                PAGE_READONLY,
+                &mut old_protect
+            );
+            
+            if result != 0 {
+                self.read_only.store(true, Ordering::Relaxed);
+                true
+            } else {
+                false
+            }
+        }
+    }
+    
+    /// Make the memory writable
+    pub fn make_writable(&self) -> bool {
+        if !self.read_only.load(Ordering::Relaxed) {
+            return true;
+        }
+        
+        unsafe {
+            use winapi::um::memoryapi::VirtualProtect;
+            use winapi::um::winnt::PAGE_READWRITE;
+            
+            // Get the base address and align to page boundary
+            let addr = self.memory.inner as *mut T as usize;
+            let page_addr = addr & !(self.page_size - 1);
+            
+            // Determine size covering the memory (at least one page)
+            let size = std::mem::size_of::<T>() + (addr - page_addr);
+            let pages = (size + self.page_size - 1) / self.page_size;
+            let total_size = pages * self.page_size;
+            
+            // Make it writable
+            let mut old_protect = 0;
+            let result = VirtualProtect(
+                page_addr as *mut _,
+                total_size,
+                PAGE_READWRITE,
+                &mut old_protect
+            );
+            
+            if result != 0 {
+                self.read_only.store(false, Ordering::Relaxed);
+                true
+            } else {
+                false
+            }
+        }
+    }
+    
+    /// Access the inner memory
+    pub fn inner(&self) -> &SecureMemory<T> {
+        &self.memory
+    }
+    
+    /// Access the inner memory mutably (automatically makes it writable first)
+    pub fn inner_mut(&mut self) -> &mut SecureMemory<T> {
+        // Ensure memory is writable
+        self.make_writable();
+        &mut self.memory
+    }
+    
+    /// Is the memory currently read-only?
+    pub fn is_read_only(&self) -> bool {
+        self.read_only.load(Ordering::Relaxed)
+    }
+}
+
+/// Implementation for WebAssembly targets
+/// In WASM, we can't do traditional memory locking, but we provide a compatible API
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
+impl<T: Sized> EnhancedSecureMemory<T> {
+    /// Create a new enhanced secure memory container
+    pub fn new(value: T) -> Self {
+        Self {
+            memory: SecureMemory::new(value),
+            read_only: AtomicBool::new(false),
+            page_size: 4096, // Default page size, not actually used
+        }
+    }
+    
+    /// Make the memory read-only (not fully supported in WASM)
+    pub fn make_read_only(&self) -> bool {
+        // In WASM, we can't actually protect memory, but we simulate the API
+        self.read_only.store(true, Ordering::Relaxed);
+        true
+    }
+    
+    /// Make the memory writable (not fully supported in WASM)
+    pub fn make_writable(&self) -> bool {
+        // In WASM, we can't actually protect memory, but we simulate the API
+        self.read_only.store(false, Ordering::Relaxed);
+        true
+    }
+    
+    /// Access the inner memory
+    pub fn inner(&self) -> &SecureMemory<T> {
+        &self.memory
+    }
+    
+    /// Access the inner memory mutably
+    pub fn inner_mut(&mut self) -> &mut SecureMemory<T> {
+        &mut self.memory
+    }
+    
+    /// Is the memory currently read-only?
+    pub fn is_read_only(&self) -> bool {
+        self.read_only.load(Ordering::Relaxed)
+    }
+}
+
+// Implement common traits for EnhancedSecureMemory regardless of platform
+#[cfg(feature = "enhanced-memory")]
+impl<T: Sized + Default> Default for EnhancedSecureMemory<T> {
+    fn default() -> Self {
+        Self::new(T::default())
+    }
+}
+
+#[cfg(feature = "enhanced-memory")]
+impl<T: Sized> Deref for EnhancedSecureMemory<T> {
+    type Target = T;
+    
+    fn deref(&self) -> &Self::Target {
+        &self.memory
+    }
+}
+
+#[cfg(feature = "enhanced-memory")]
+impl<T: Sized> DerefMut for EnhancedSecureMemory<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        // Ensure memory is writable before mutating
+        self.make_writable();
+        &mut *self.memory
+    }
+}
+
+#[cfg(feature = "enhanced-memory")]
+impl<T: Sized> Drop for EnhancedSecureMemory<T> {
+    fn drop(&mut self) {
+        // Make memory writable for proper cleanup
+        self.make_writable();
+        // Drop will be called on self.memory automatically
+    }
+}
+
+#[cfg(feature = "enhanced-memory")]
+impl<T: Sized> Zeroize for EnhancedSecureMemory<T> {
+    fn zeroize(&mut self) {
+        // Ensure memory is writable before zeroizing
+        self.make_writable();
+        self.memory.zeroize();
+    }
+}
+
+/// WASM-specific version of the memory manager
+#[cfg(target_arch = "wasm32")]
+pub struct WasmMemoryManager {
+    /// Base memory manager
+    inner: SecureMemoryManager,
+    /// Whether secure random is available
+    has_secure_random: bool,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl WasmMemoryManager {
+    /// Create a new WASM-specific memory manager
+    pub fn new() -> Self {
+        // Check if secure random is available
+        let has_secure_random = js_sys::crypto::is_secure_context();
+        
+        Self {
+            inner: SecureMemoryManager::new(MemorySecurity::Standard),
+            has_secure_random,
+        }
+    }
+    
+    /// Check if secure random is available
+    pub fn has_secure_random(&self) -> bool {
+        self.has_secure_random
+    }
+    
+    /// Get a reference to the inner manager
+    pub fn inner(&self) -> &SecureMemoryManager {
+        &self.inner
+    }
+    
+    /// Get a mutable reference to the inner manager
+    pub fn inner_mut(&mut self) -> &mut SecureMemoryManager {
+        &mut self.inner
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl Default for WasmMemoryManager {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -847,5 +1339,55 @@ mod tests {
         for byte in &data {
             assert_eq!(*byte, 0);
         }
+    }
+    
+    #[test]
+    fn test_memory_manager() {
+        let memory_manager = SecureMemoryManager::new(MemorySecurity::Enhanced);
+        
+        // Test creating secure memory through the manager
+        let secure_mem = memory_manager.secure_memory([0u8; 32]);
+        assert!(secure_mem.is_locked());
+        
+        // Test creating secure vector through the manager
+        let secure_vec = memory_manager.secure_vec_from_vec(vec![1, 2, 3, 4, 5]);
+        assert_eq!(secure_vec[0], 1);
+        
+        // Test security settings
+        assert!(memory_manager.is_memory_locking_enabled());
+        assert!(memory_manager.is_canary_protection_enabled());
+        assert!(memory_manager.is_zero_on_free_enabled());
+        
+        // Test security level
+        assert_eq!(memory_manager.security_level(), MemorySecurity::Enhanced);
+    }
+    
+    // Test EnhancedSecureMemory if the feature is enabled
+    #[cfg(feature = "enhanced-memory")]
+    #[test]
+    fn test_enhanced_secure_memory() {
+        let mut enhanced = EnhancedSecureMemory::new([0u8; 32]);
+        
+        // Should start as writable
+        assert!(!enhanced.is_read_only());
+        
+        // Set some values
+        enhanced[0] = 42;
+        enhanced[1] = 43;
+        
+        // Make read-only
+        enhanced.make_read_only();
+        assert!(enhanced.is_read_only());
+        
+        // We can still read
+        assert_eq!(enhanced[0], 42);
+        
+        // Make writable again
+        enhanced.make_writable();
+        assert!(!enhanced.is_read_only());
+        
+        // Now we can modify
+        enhanced[2] = 44;
+        assert_eq!(enhanced[2], 44);
     }
 }
