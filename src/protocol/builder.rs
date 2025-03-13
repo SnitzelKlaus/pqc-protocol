@@ -10,9 +10,8 @@ use crate::core::{
     error::Result,
     crypto::config::{CryptoConfig, KeyExchangeAlgorithm, SignatureAlgorithm, SymmetricAlgorithm},
     session::state::Role,
-    memory::{MemorySecurity, SecureMemoryManager},
+    memory::{MemorySecurity, MemoryConfig},
 };
-use crate::memory::MemoryConfig;
 
 // Import the client and server implementations
 use crate::protocol::client::sync_client::PqcClient;

@@ -20,7 +20,7 @@ use crate::core::{
         key_exchange::KeyExchange,
     },
     message::{MessageType, MessageBuilder, MessageParser},
-    memory::{SecureMemoryManager, MemorySecurity},
+    memory::{SecureMemoryManager, MemorySecurity, SecureSession},
 };
 use crate::{invalid_state_err, auth_err, protocol_err};
 
