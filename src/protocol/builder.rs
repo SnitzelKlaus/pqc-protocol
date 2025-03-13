@@ -2,14 +2,17 @@
 Protocol builder for the PQC protocol.
 
 This module provides a builder pattern for creating protocol instances
-with specific configurations.
+with specific configurations, including cryptographic algorithms and
+memory security options.
 */
 
 use crate::core::{
     error::Result,
     crypto::config::{CryptoConfig, KeyExchangeAlgorithm, SignatureAlgorithm, SymmetricAlgorithm},
     session::state::Role,
+    memory::{MemorySecurity, SecureMemoryManager},
 };
+use crate::memory::MemoryConfig;
 
 // Import the client and server implementations
 use crate::protocol::client::sync_client::PqcClient;
@@ -28,8 +31,8 @@ pub struct PqcProtocolBuilder {
     /// Role (client or server)
     role: Role,
     
-    /// Memory security setting
-    secure_memory: bool,
+    /// Memory configuration
+    memory_config: MemoryConfig,
 }
 
 impl PqcProtocolBuilder {
@@ -38,7 +41,7 @@ impl PqcProtocolBuilder {
         Self {
             config: CryptoConfig::default(),
             role: Role::Client,
-            secure_memory: true,
+            memory_config: MemoryConfig::default(),
         }
     }
     
@@ -81,12 +84,15 @@ impl PqcProtocolBuilder {
     /// Use a preset configuration for lightweight environments
     pub fn lightweight(mut self) -> Self {
         self.config = CryptoConfig::lightweight();
+        self.memory_config = MemoryConfig::embedded();
         self
     }
     
     /// Use a preset configuration for high security
     pub fn high_security(mut self) -> Self {
         self.config = CryptoConfig::high_security();
+        self.memory_config = MemoryConfig::standard()
+            .with_security_level(MemorySecurity::Maximum);
         self
     }
     
@@ -96,9 +102,46 @@ impl PqcProtocolBuilder {
         self
     }
     
-    /// Enable secure memory
-    pub fn with_secure_memory(mut self, secure: bool) -> Self {
-        self.secure_memory = secure;
+    /// Configure for WebAssembly environment
+    pub fn for_wasm(mut self) -> Self {
+        self.memory_config = MemoryConfig::wasm();
+        self
+    }
+    
+    /// Configure for embedded environment
+    pub fn for_embedded(mut self) -> Self {
+        self.memory_config = MemoryConfig::embedded();
+        self.config = CryptoConfig::lightweight();
+        self
+    }
+    
+    /// Configure for mobile environment
+    pub fn for_mobile(mut self) -> Self {
+        self.memory_config = MemoryConfig::mobile();
+        self
+    }
+    
+    /// Set a custom memory configuration
+    pub fn with_memory_config(mut self, memory_config: MemoryConfig) -> Self {
+        self.memory_config = memory_config;
+        self
+    }
+    
+    /// Set memory security level
+    pub fn with_memory_security(mut self, level: MemorySecurity) -> Self {
+        self.memory_config = self.memory_config.with_security_level(level);
+        self
+    }
+    
+    /// Enable or disable memory locking
+    pub fn with_memory_locking(mut self, enable: bool) -> Self {
+        self.memory_config = self.memory_config.with_memory_locking(enable);
+        self
+    }
+    
+    /// Enable or disable canary protection
+    pub fn with_canary_protection(mut self, enable: bool) -> Self {
+        self.memory_config = self.memory_config.with_canary(enable);
         self
     }
     
@@ -106,9 +149,11 @@ impl PqcProtocolBuilder {
     pub fn build_client(self) -> Result<PqcClient> {
         let mut client = PqcClient::with_config(self.config.clone())?;
         client.set_role(Role::Client);
-        if !self.secure_memory {
-            client.disable_secure_memory()?;
-        }
+        
+        // Apply memory configuration
+        let mut memory_manager = client.session_mut().memory_manager_mut();
+        self.memory_config.apply_to_manager(memory_manager);
+        
         Ok(client)
     }
     
@@ -116,29 +161,39 @@ impl PqcProtocolBuilder {
     pub fn build_server(self) -> Result<PqcServer> {
         let mut server = PqcServer::with_config(self.config.clone())?;
         server.set_role(Role::Server);
-        if !self.secure_memory {
-            server.disable_secure_memory()?;
-        }
+        
+        // Apply memory configuration
+        let mut memory_manager = server.session_mut().memory_manager_mut();
+        self.memory_config.apply_to_manager(memory_manager);
+        
         Ok(server)
     }
     
     /// Build an asynchronous client (requires "async" feature)
     #[cfg(feature = "async")]
     pub async fn build_async_client(self) -> Result<AsyncPqcClient> {
-        let mut client = AsyncPqcClient::with_config(self.config.clone()).await?;
-        if !self.secure_memory {
-            client.disable_secure_memory().await?;
-        }
+        let client = AsyncPqcClient::with_config(self.config.clone()).await?;
+        
+        // Apply memory configuration
+        client.with_session(|session| async move {
+            self.memory_config.apply_to_manager(session.memory_manager_mut());
+            Ok(())
+        }).await?;
+        
         Ok(client)
     }
     
     /// Build an asynchronous server (requires "async" feature)
     #[cfg(feature = "async")]
     pub async fn build_async_server(self) -> Result<AsyncPqcServer> {
-        let mut server = AsyncPqcServer::with_config(self.config.clone()).await?;
-        if !self.secure_memory {
-            server.disable_secure_memory().await?;
-        }
+        let server = AsyncPqcServer::with_config(self.config.clone()).await?;
+        
+        // Apply memory configuration
+        server.with_session(|session| async move {
+            self.memory_config.apply_to_manager(session.memory_manager_mut());
+            Ok(())
+        }).await?;
+        
         Ok(server)
     }
 }
@@ -149,7 +204,51 @@ impl Default for PqcProtocolBuilder {
     }
 }
 
-// Convenience functions
+// Convenience functions with platform detection
+
+/// Create a client with automatically detected platform settings
+pub fn client_for_platform() -> Result<PqcClient> {
+    let config = crate::memory::for_current_platform();
+    
+    PqcProtocolBuilder::new()
+        .with_memory_config(config)
+        .build_client()
+}
+
+/// Create a server with automatically detected platform settings
+pub fn server_for_platform() -> Result<PqcServer> {
+    let config = crate::memory::for_current_platform();
+    
+    PqcProtocolBuilder::new()
+        .as_server()
+        .with_memory_config(config)
+        .build_server()
+}
+
+#[cfg(feature = "async")]
+/// Create an async client with automatically detected platform settings
+pub async fn async_client_for_platform() -> Result<AsyncPqcClient> {
+    let config = crate::memory::for_current_platform();
+    
+    PqcProtocolBuilder::new()
+        .with_memory_config(config)
+        .build_async_client()
+        .await
+}
+
+#[cfg(feature = "async")]
+/// Create an async server with automatically detected platform settings
+pub async fn async_server_for_platform() -> Result<AsyncPqcServer> {
+    let config = crate::memory::for_current_platform();
+    
+    PqcProtocolBuilder::new()
+        .as_server()
+        .with_memory_config(config)
+        .build_async_server()
+        .await
+}
+
+// Original convenience functions
 
 /// Create a client with default settings
 pub fn client() -> Result<PqcClient> {
@@ -212,6 +311,40 @@ mod tests {
         Ok(())
     }
     
+    #[test]
+    fn test_memory_configuration() -> Result<()> {
+        // Test standard memory configuration
+        let standard_client = PqcProtocolBuilder::new().build_client()?;
+        assert!(standard_client.session().memory_manager().is_memory_locking_enabled());
+        assert!(standard_client.session().memory_manager().is_canary_protection_enabled());
+        
+        // Test embedded memory configuration
+        let embedded_client = PqcProtocolBuilder::new()
+            .for_embedded()
+            .build_client()?;
+        assert!(!embedded_client.session().memory_manager().is_memory_locking_enabled());
+        assert!(!embedded_client.session().memory_manager().is_canary_protection_enabled());
+        
+        // Test WASM memory configuration
+        let wasm_client = PqcProtocolBuilder::new()
+            .for_wasm()
+            .build_client()?;
+        assert!(!wasm_client.session().memory_manager().is_memory_locking_enabled());
+        assert!(wasm_client.session().memory_manager().is_canary_protection_enabled());
+        
+        // Test custom memory configuration
+        let custom_client = PqcProtocolBuilder::new()
+            .with_memory_security(MemorySecurity::Enhanced)
+            .with_memory_locking(false)
+            .with_canary_protection(true)
+            .build_client()?;
+        assert!(!custom_client.session().memory_manager().is_memory_locking_enabled());
+        assert!(custom_client.session().memory_manager().is_canary_protection_enabled());
+        assert_eq!(custom_client.session().memory_security_level(), MemorySecurity::Enhanced);
+        
+        Ok(())
+    }
+    
     #[cfg(feature = "async")]
     #[tokio::test]
     async fn test_async_builder() -> Result<()> {
@@ -225,6 +358,24 @@ mod tests {
             .await?;
         
         assert_eq!(client.state().await?, crate::core::session::state::SessionState::New);
+        
+        Ok(())
+    }
+    
+    #[cfg(feature = "async")]
+    #[tokio::test]
+    async fn test_async_memory_config() -> Result<()> {
+        // This is a bit tricker to test with the async API
+        let client = PqcProtocolBuilder::new()
+            .with_memory_security(MemorySecurity::Maximum)
+            .build_async_client()
+            .await?;
+        
+        // Verify the memory security level was set
+        client.with_session(|session| async move {
+            assert_eq!(session.memory_security_level(), MemorySecurity::Maximum);
+            Ok(())
+        }).await?;
         
         Ok(())
     }

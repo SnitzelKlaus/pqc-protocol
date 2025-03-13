@@ -2,7 +2,8 @@
 Enhanced key management for the PQC protocol.
 
 This module provides functionality for key exchange, key management,
-and derived key handling for the session, supporting multiple algorithms.
+and derived key handling for the session, supporting multiple algorithms
+and secure memory.
 */
 
 use crate::core::{
@@ -15,7 +16,7 @@ use crate::core::{
         KyberCiphertext,
     },
     constants::sizes,
-    memory::SecureMemory,
+    memory::{SecureMemory, SecureMemoryManager},
 };
 
 use pqcrypto_traits::kem::SharedSecret;
@@ -100,6 +101,26 @@ impl KeyManager {
         Ok(public_key)
     }
     
+    /// Initialize key exchange with memory manager (client side)
+    pub fn init_with_memory_manager(&mut self, memory_manager: &SecureMemoryManager) -> Result<KyberPublicKey> {
+        // Create key exchanger with the configured algorithm
+        let key_exchanger = KeyExchange::new(self.key_exchange_algorithm)?;
+        
+        // Generate key pair
+        let (public_key_bytes, secret_key_bytes) = key_exchanger.generate_keypair()?;
+        
+        // Store keys, wrapping the secret key using the memory manager
+        self.kyber_public_key = Some(public_key_bytes.clone());
+        
+        // Use the memory manager to create secure memory
+        self.kyber_secret_key = Some(memory_manager.secure_memory(secret_key_bytes));
+        
+        // Convert bytes to KyberPublicKey (this is for backward compatibility)
+        let public_key = KyberPublicKey::from_bytes(&public_key_bytes)?;
+        
+        Ok(public_key)
+    }
+    
     /// Accept key exchange (server side)
     pub fn accept_key_exchange(&mut self, client_public_key: &KyberPublicKey) -> Result<KyberCiphertext> {
         // Create key exchanger with the configured algorithm
@@ -114,6 +135,32 @@ impl KeyManager {
         
         // Wrap the encryption key with SecureMemory and initialize the cipher
         self.encryption_key = Some(SecureMemory::new(encryption_key));
+        self.cipher = Some(Cipher::new(&encryption_key, self.symmetric_algorithm)?);
+        
+        // Convert bytes to KyberCiphertext (for backward compatibility)
+        let ciphertext = KyberCiphertext::from_bytes(&ciphertext_bytes)?;
+        
+        Ok(ciphertext)
+    }
+    
+    /// Accept key exchange with memory manager (server side)
+    pub fn accept_key_exchange_with_memory_manager(
+        &mut self, 
+        client_public_key: &KyberPublicKey,
+        memory_manager: &SecureMemoryManager
+    ) -> Result<KyberCiphertext> {
+        // Create key exchanger with the configured algorithm
+        let key_exchanger = KeyExchange::new(self.key_exchange_algorithm)?;
+        
+        // Encapsulate shared secret
+        let client_pk_bytes = client_public_key.as_bytes();
+        let (shared_secret, ciphertext_bytes) = key_exchanger.encapsulate(client_pk_bytes)?;
+        
+        // Derive encryption key
+        let encryption_key = KeyExchange::derive_encryption_key(&shared_secret)?;
+        
+        // Wrap the encryption key with SecureMemory using memory manager
+        self.encryption_key = Some(memory_manager.secure_memory(encryption_key));
         self.cipher = Some(Cipher::new(&encryption_key, self.symmetric_algorithm)?);
         
         // Convert bytes to KyberCiphertext (for backward compatibility)
@@ -147,6 +194,35 @@ impl KeyManager {
         Ok(())
     }
     
+    /// Process key exchange response with memory manager (client side)
+    pub fn process_key_exchange_with_memory_manager(
+        &mut self, 
+        ciphertext: &KyberCiphertext,
+        memory_manager: &SecureMemoryManager
+    ) -> Result<()> {
+        // Get the secret key from SecureMemory
+        let secure_kyber_secret_key = self.kyber_secret_key.as_ref()
+            .ok_or_else(|| Error::Internal("Secret key not available".into()))?;
+        
+        // Create key exchanger with the configured algorithm
+        let key_exchanger = KeyExchange::new(self.key_exchange_algorithm)?;
+        
+        // Decapsulate shared secret
+        let shared_secret = key_exchanger.decapsulate(
+            ciphertext.as_bytes(),
+            secure_kyber_secret_key.as_ref()
+        )?;
+        
+        // Derive encryption key
+        let encryption_key = KeyExchange::derive_encryption_key(&shared_secret)?;
+        
+        // Wrap the encryption key with SecureMemory and initialize the cipher
+        self.encryption_key = Some(memory_manager.secure_memory(encryption_key));
+        self.cipher = Some(Cipher::new(&encryption_key, self.symmetric_algorithm)?);
+        
+        Ok(())
+    }
+    
     /// Get the current Kyber public key (if available)
     pub fn get_public_key(&self) -> Option<&[u8]> {
         self.kyber_public_key.as_deref()
@@ -164,11 +240,36 @@ impl KeyManager {
             .ok_or_else(|| Error::Internal("Cipher not initialized".into()))
     }
     
+    /// Get a reference to the encryption key
+    pub fn get_encryption_key(&self) -> Result<&SecureMemory<[u8; sizes::chacha::KEY_SIZE]>> {
+        self.encryption_key.as_ref()
+            .ok_or_else(|| Error::Internal("Encryption key not initialized".into()))
+    }
+    
+    /// Get a mutable reference to the encryption key
+    pub fn get_encryption_key_mut(&mut self) -> Result<&mut SecureMemory<[u8; sizes::chacha::KEY_SIZE]>> {
+        self.encryption_key.as_mut()
+            .ok_or_else(|| Error::Internal("Encryption key not initialized".into()))
+    }
+    
     /// Clear sensitive keys (useful during key rotation)
     pub fn clear_keys(&mut self) {
+        // Clear Kyber keys
+        if let Some(ref mut key) = self.kyber_secret_key {
+            key.clear();
+        }
         self.kyber_public_key = None;
         self.kyber_secret_key = None;
+        
+        // Clear temporary secret key
+        if let Some(ref mut key) = self.temp_secret_key {
+            // Zero out the key data
+            for byte in key.iter_mut() {
+                *byte = 0;
+            }
+        }
         self.temp_secret_key = None;
+        
         // Note: We don't clear encryption_key and cipher 
         // as they're needed until new ones are established
     }
@@ -176,6 +277,19 @@ impl KeyManager {
     /// Update the encryption key and cipher
     pub fn update_encryption(&mut self, new_encryption_key: [u8; sizes::chacha::KEY_SIZE], algorithm: SymmetricAlgorithm) -> Result<()> {
         self.encryption_key = Some(SecureMemory::new(new_encryption_key));
+        self.cipher = Some(Cipher::new(&new_encryption_key, algorithm)?);
+        self.symmetric_algorithm = algorithm;
+        Ok(())
+    }
+    
+    /// Update the encryption key and cipher with memory manager
+    pub fn update_encryption_with_memory_manager(
+        &mut self,
+        new_encryption_key: [u8; sizes::chacha::KEY_SIZE],
+        algorithm: SymmetricAlgorithm,
+        memory_manager: &SecureMemoryManager
+    ) -> Result<()> {
+        self.encryption_key = Some(memory_manager.secure_memory(new_encryption_key));
         self.cipher = Some(Cipher::new(&new_encryption_key, algorithm)?);
         self.symmetric_algorithm = algorithm;
         Ok(())
@@ -205,12 +319,32 @@ impl KeyManager {
         // Return the public key
         Ok(public_key_bytes)
     }
+    
+    /// Generate a new key pair for rotation with memory manager
+    pub fn generate_rotation_keypair_with_memory_manager(
+        &mut self,
+        memory_manager: &SecureMemoryManager
+    ) -> Result<Vec<u8>> {
+        // Create key exchanger with the configured algorithm
+        let key_exchanger = KeyExchange::new(self.key_exchange_algorithm)?;
+        
+        // Generate new key pair
+        let (public_key_bytes, secret_key_bytes) = key_exchanger.generate_keypair()?;
+        
+        // For key rotation, we just store it temporarily, not in secure memory
+        // because it's only needed briefly during the rotation process
+        self.store_temporary_secret_key(secret_key_bytes);
+        
+        // Return the public key
+        Ok(public_key_bytes)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::crypto::config::CryptoConfig;
+    use crate::core::memory::MemorySecurity;
     
     #[test]
     fn test_key_exchange() -> Result<()> {
@@ -226,6 +360,36 @@ mod tests {
         
         // Client processes server's response
         client_key_manager.process_key_exchange(&ciphertext)?;
+        
+        // Verify both sides have initialized the cipher
+        let client_cipher = client_key_manager.get_cipher()?;
+        let server_cipher = server_key_manager.get_cipher()?;
+        
+        assert!(client_cipher.is_initialized());
+        assert!(server_cipher.is_initialized());
+        
+        Ok(())
+    }
+    
+    #[test]
+    fn test_key_exchange_with_memory_manager() -> Result<()> {
+        let config = CryptoConfig::default();
+        let mut client_key_manager = KeyManager::new_with_config(&config)?;
+        let mut server_key_manager = KeyManager::new_with_config(&config)?;
+        
+        // Create memory managers
+        let memory_manager = SecureMemoryManager::new(MemorySecurity::Enhanced);
+        
+        // Client initiates key exchange with memory manager
+        let client_public_key = client_key_manager.init_with_memory_manager(&memory_manager)?;
+        
+        // Server accepts key exchange with memory manager
+        let ciphertext = server_key_manager.accept_key_exchange_with_memory_manager(
+            &client_public_key, &memory_manager)?;
+        
+        // Client processes server's response with memory manager
+        client_key_manager.process_key_exchange_with_memory_manager(
+            &ciphertext, &memory_manager)?;
         
         // Verify both sides have initialized the cipher
         let client_cipher = client_key_manager.get_cipher()?;

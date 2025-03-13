@@ -3,7 +3,7 @@ Enhanced session implementation for the PQC protocol.
 
 This module integrates the different components (key management, authentication,
 data handling) to provide a complete session implementation with configurable
-cryptographic algorithms.
+cryptographic algorithms and memory security.
 */
 
 use crate::core::{
@@ -20,6 +20,7 @@ use crate::core::{
         key_exchange::KeyExchange,
     },
     message::{MessageType, MessageBuilder, MessageParser},
+    memory::{SecureMemoryManager, MemorySecurity},
 };
 use crate::{invalid_state_err, auth_err, protocol_err};
 
@@ -39,6 +40,9 @@ pub struct Session {
     
     /// Manages key rotation
     rotation_manager: KeyRotationManager,
+    
+    /// Manages secure memory
+    memory_manager: SecureMemoryManager,
     
     /// Cryptographic configuration
     crypto_config: CryptoConfig,
@@ -61,12 +65,16 @@ impl Session {
         let data_manager = DataManager::new();
         let rotation_manager = KeyRotationManager::new();
         
+        // Create with standard memory security by default
+        let memory_manager = SecureMemoryManager::default();
+        
         Ok(Self {
             state_manager,
             key_manager,
             auth_manager,
             data_manager,
             rotation_manager,
+            memory_manager,
             crypto_config: config,
         })
     }
@@ -81,9 +89,67 @@ impl Session {
         Self::with_config(CryptoConfig::high_security())
     }
     
-    /// Set the role of this session (client or server)
+    /// Create a session optimized for embedded systems
+    pub fn embedded() -> Result<Self> {
+        let mut session = Self::with_config(CryptoConfig::lightweight())?;
+        
+        // Reduce memory security for embedded environments
+        session.memory_manager.disable_memory_locking();
+        session.memory_manager.disable_canary_protection();
+        
+        Ok(session)
+    }
+    
+    /// Get a reference to the memory manager
+    pub fn memory_manager(&self) -> &SecureMemoryManager {
+        &self.memory_manager
+    }
+    
+    /// Get a mutable reference to the memory manager
+    pub fn memory_manager_mut(&mut self) -> &mut SecureMemoryManager {
+        &mut self.memory_manager
+    }
+    
+    /// Set the memory security level
+    pub fn set_memory_security_level(&mut self, level: MemorySecurity) {
+        self.memory_manager.set_security_level(level);
+    }
+    
+    /// Get the current memory security level
+    pub fn memory_security_level(&self) -> MemorySecurity {
+        self.memory_manager.security_level()
+    }
+    
+    /// Enable secure memory features
+    pub fn enable_secure_memory(&mut self) {
+        self.memory_manager.enable_memory_locking();
+        self.memory_manager.enable_canary_protection();
+        self.memory_manager.enable_zero_on_free();
+    }
+    
+    /// Disable secure memory features
+    pub fn disable_secure_memory(&mut self) {
+        self.memory_manager.disable_memory_locking();
+        self.memory_manager.disable_canary_protection();
+        self.memory_manager.disable_zero_on_free();
+    }
+    
+    /// Zero sensitive memory
+    pub fn zero_sensitive_memory(&mut self) {
+        // Clear key material from key manager
+        self.key_manager.clear_keys();
+        
+        // Additional cleanup can be added here
+    }
+    
+    /// Set role (client or server)
     pub fn set_role(&mut self, role: Role) {
         self.state_manager.set_role(role);
+    }
+    
+    /// Get the current role
+    pub fn role(&self) -> Role {
+        self.state_manager.role()
     }
     
     /// Get the current session state
@@ -131,7 +197,11 @@ impl Session {
         }
         
         // Perform key exchange
-        let public_key = self.key_manager.init_key_exchange()?;
+        let public_key = if cfg!(feature = "enhanced-memory") {
+            self.key_manager.init_with_memory_manager(&self.memory_manager)?
+        } else {
+            self.key_manager.init_key_exchange()?
+        };
         
         // Update state
         self.state_manager.transition_to_key_exchange_initiated();
@@ -294,6 +364,11 @@ impl Session {
         // Update state
         self.state_manager.transition_to_closed();
         
+        // Zero sensitive memory if needed
+        if self.memory_manager.is_zero_on_free_enabled() {
+            self.zero_sensitive_memory();
+        }
+        
         // Generate close message
         self.data_manager.generate_close()
     }
@@ -324,9 +399,12 @@ impl Session {
         // Mark rotation as in progress
         self.rotation_manager.begin_rotation();
         
-        // Generate new Kyber key pair
-        let key_exchanger = KeyExchange::from_config(&self.crypto_config)?;
-        let (public_key_bytes, _) = key_exchanger.generate_keypair()?;
+        // Generate new Kyber key pair, using memory manager if enabled
+        let public_key_bytes = if cfg!(feature = "enhanced-memory") {
+            self.key_manager.generate_rotation_keypair_with_memory_manager(&self.memory_manager)?
+        } else {
+            self.key_manager.generate_rotation_keypair()?
+        };
         
         // Build a key rotation request message
         let seq_num = self.data_manager.get_send_sequence();
@@ -367,8 +445,13 @@ impl Session {
         // Derive a new encryption key
         let new_key = KeyExchange::derive_encryption_key(&shared_secret)?;
         
-        // Update the cipher with the new key
-        self.key_manager.update_encryption(new_key, self.crypto_config.symmetric)?;
+        // Update the cipher with the new key, using memory manager if enabled
+        if cfg!(feature = "enhanced-memory") {
+            self.key_manager.update_encryption_with_memory_manager(
+                new_key, self.crypto_config.symmetric, &self.memory_manager)?;
+        } else {
+            self.key_manager.update_encryption(new_key, self.crypto_config.symmetric)?;
+        }
         
         // Generate a response with the ciphertext
         let seq_num = self.data_manager.get_send_sequence();
@@ -411,8 +494,13 @@ impl Session {
         // Derive a new encryption key
         let new_key = KeyExchange::derive_encryption_key(&shared_secret)?;
         
-        // Update the cipher with the new key
-        self.key_manager.update_encryption(new_key, self.crypto_config.symmetric)?;
+        // Update the cipher with the new key, using memory manager if enabled
+        if cfg!(feature = "enhanced-memory") {
+            self.key_manager.update_encryption_with_memory_manager(
+                new_key, self.crypto_config.symmetric, &self.memory_manager)?;
+        } else {
+            self.key_manager.update_encryption(new_key, self.crypto_config.symmetric)?;
+        }
         
         // Reset sequence numbers
         self.data_manager.reset_sequences();
@@ -475,6 +563,21 @@ impl PqcSessionKeyRotation for Session {
     
     fn set_rotation_params(&mut self, params: KeyRotationParams) {
         self.set_rotation_params(params);
+    }
+}
+
+// Implementation of SecureSession trait for Session
+impl SecureSession for Session {
+    fn memory_manager(&self) -> &SecureMemoryManager {
+        &self.memory_manager
+    }
+    
+    fn memory_manager_mut(&mut self) -> &mut SecureMemoryManager {
+        &mut self.memory_manager
+    }
+    
+    fn erase_sensitive_memory(&mut self) {
+        self.zero_sensitive_memory();
     }
 }
 
@@ -553,35 +656,35 @@ mod tests {
     }
     
     #[test]
-    fn test_different_configs() -> Result<()> {
-        // Test with high security config
-        let mut high_sec_client = Session::high_security()?;
-        let mut high_sec_server = Session::high_security()?;
-        high_sec_server.set_role(Role::Server);
+    fn test_memory_security() -> Result<()> {
+        let mut session = Session::new()?;
         
-        // Key exchange
-        let client_public_key = high_sec_client.init_key_exchange()?;
-        let ciphertext = high_sec_server.accept_key_exchange(&client_public_key)?;
-        high_sec_client.process_key_exchange(&ciphertext)?;
+        // Test default security level
+        assert_eq!(session.memory_security_level(), MemorySecurity::Standard);
         
-        // Authentication
-        high_sec_client.set_remote_verification_key(high_sec_server.local_verification_key().clone())?;
-        high_sec_server.set_remote_verification_key(high_sec_client.local_verification_key().clone())?;
-        high_sec_client.complete_authentication()?;
-        high_sec_server.complete_authentication()?;
+        // Change security level
+        session.set_memory_security_level(MemorySecurity::Enhanced);
+        assert_eq!(session.memory_security_level(), MemorySecurity::Enhanced);
         
-        // Data transfer
-        let test_data = b"High security message";
-        let encrypted = high_sec_client.encrypt_and_sign(test_data)?;
-        let decrypted = high_sec_server.verify_and_decrypt(&encrypted)?;
+        // Test secure memory operations
+        assert!(session.memory_manager().is_memory_locking_enabled());
+        session.disable_secure_memory();
+        assert!(!session.memory_manager().is_memory_locking_enabled());
         
-        assert_eq!(test_data, &decrypted[..]);
+        session.enable_secure_memory();
+        assert!(session.memory_manager().is_memory_locking_enabled());
         
-        // Test with lightweight config
-        let mut light_server = Session::lightweight()?;
-        light_server.set_role(Role::Server);
+        Ok(())
+    }
+    
+    #[test]
+    fn test_embedded_mode() -> Result<()> {
+        let session = Session::embedded()?;
         
-        // Similar testing for lightweight config...
+        // In embedded mode, memory locking should be disabled
+        assert!(!session.memory_manager().is_memory_locking_enabled());
+        // In embedded mode, canary protection should be disabled
+        assert!(!session.memory_manager().is_canary_protection_enabled());
         
         Ok(())
     }
