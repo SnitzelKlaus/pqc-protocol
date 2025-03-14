@@ -30,3 +30,7 @@ pub use self::error::{Error, Result, AuthError, CryptoError, KeyExchangeError};
 pub use self::message::{types::MessageType, format::MessageHeader};
 pub use self::session::{state::SessionState, state::Role};
 pub use self::constants::VERSION;
+
+// Re-export enhanced security features
+pub use self::memory::{ZeroizeOnDrop, ProtectedMemory, SecureHeaplessVec};
+pub use self::security::{hardware_security::HardwareSecurityManager, constant_time};

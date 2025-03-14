@@ -10,6 +10,11 @@ pub mod secure_memory;
 pub mod secure_vec;
 pub mod zeroize;
 
+// New modules for enhanced security
+pub mod zeroize_on_drop;
+pub mod heapless_vec;
+pub mod protected_memory;
+
 // Memory security levels and traits
 pub mod memory_security;
 
@@ -31,6 +36,11 @@ pub mod config;
 pub use secure_memory::SecureMemory;
 pub use secure_vec::SecureVec;
 pub use zeroize::{Zeroize, secure_zero_memory};
+
+// Re-export the new components
+pub use zeroize_on_drop::ZeroizeOnDrop;
+pub use heapless_vec::{SecureHeaplessVec, SecureVec32, SecureVec64};
+pub use protected_memory::{ProtectedMemory, ProtectedKey32};
 
 // Re-export memory manager components
 pub use secure_memory_manager::SecureMemoryManager;

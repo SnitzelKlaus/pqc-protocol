@@ -16,6 +16,16 @@ This library provides a post-quantum cryptography protocol implementation with:
 - Cross-platform compatibility
 - Both synchronous and asynchronous APIs
 - Configurable cryptographic algorithms
+
+## Enhanced Security Features
+
+This library includes enhanced security features to protect sensitive data:
+
+- ZeroizeOnDrop ensures sensitive memory is wiped when no longer needed
+- Heapless vectors avoid heap allocation risks with stack-based storage
+- Protected memory using mprotect for read-only sensitive data
+- Hardware security module integration for secure key storage when available
+- Constant-time operations to prevent timing attacks
 */
 
 // Core protocol components
@@ -57,6 +67,11 @@ pub use protocol::shared::traits::{
     PqcStreamSender, PqcStreamReceiver, PqcConfigurable, PqcMemoryControl,
     UnifiedPqcClient, UnifiedPqcServer
 };
+
+// Re-export enhanced security features for ease of use
+pub use core::memory::{ZeroizeOnDrop, ProtectedMemory, SecureHeaplessVec, SecureVec32, SecureVec64};
+pub use core::security::hardware_security::{HardwareSecurityManager, HardwareSecurityCapability};
+pub use core::security::constant_time::{constant_time_eq, constant_time_select};
 
 // Re-export synchronous API components for ease of use
 pub mod sync {
