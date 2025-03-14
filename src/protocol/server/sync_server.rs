@@ -9,7 +9,7 @@ use crate::{
         session::{PqcSession, state::{SessionState, Role}},
         constants::MAX_CHUNK_SIZE,
         crypto::config::{CryptoConfig, KeyExchangeAlgorithm},
-        memory::SecureMemory,
+        memory::{SecureMemory, Zeroize, SecureVec, SecureSession},
     },
     protocol::{
         stream::sync_stream::{PqcSyncStreamSender, PqcSyncStreamReceiver},
@@ -75,12 +75,14 @@ impl PqcServer {
     /// This is useful for embedded platforms with limited resources.
     pub fn disable_secure_memory(&mut self) -> Result<()> {
         self.secure_memory_enabled = false;
+        self.session.disable_secure_memory();
         Ok(())
     }
     
     /// Enable secure memory management.
     pub fn enable_secure_memory(&mut self) -> Result<()> {
         self.secure_memory_enabled = true;
+        self.session.enable_secure_memory();
         Ok(())
     }
     
@@ -202,12 +204,8 @@ impl PqcConfigurable for PqcServer {
 
 impl PqcMemoryControl for PqcServer {
     fn zero_sensitive_memory(&mut self) {
-        // Ideally, we would directly call into the session's secure memory
-        // For now, we just reset the session to clear sensitive data
-        if let Ok(new_session) = PqcSession::new() {
-            self.session = new_session;
-            self.session.set_role(Role::Server);
-        }
+        // Use the SecureSession trait to erase sensitive data
+        self.session.erase_sensitive_memory();
     }
     
     fn is_memory_secure(&self) -> bool {
@@ -220,6 +218,14 @@ impl PqcMemoryControl for PqcServer {
         } else {
             self.disable_secure_memory()
         }
+    }
+}
+
+// Implement Zeroize trait for PqcServer
+
+impl Zeroize for PqcServer {
+    fn zeroize(&mut self) {
+        self.zero_sensitive_memory();
     }
 }
 
@@ -386,6 +392,44 @@ mod tests {
         assert!(!server.is_memory_secure());
         server.enable_secure_memory()?;
         assert!(server.is_memory_secure());
+        
+        Ok(())
+    }
+    
+    #[test]
+    fn test_zeroize() -> Result<()> {
+        let mut server = PqcServer::new()?;
+        
+        // Setup some initial state
+        let client = crate::protocol::client::sync_client::PqcClient::new()?;
+        let client_pk = client.connect()?;
+        let _ = server.accept(&client_pk)?;
+        
+        // Test zeroize implementation
+        server.zeroize();
+        
+        // Should still be in a valid state
+        assert_eq!(server.state(), SessionState::KeyExchangeCompleted);
+        
+        Ok(())
+    }
+    
+    #[test]
+    fn test_memory_security_integration() -> Result<()> {
+        let mut server = PqcServer::new()?;
+        
+        // Check default state of secure memory
+        assert!(server.is_memory_secure());
+        
+        // Test that the PqcServer settings affect the underlying session
+        server.disable_secure_memory()?;
+        #[cfg(feature = "memory-lock")]
+        assert!(!server.session().memory_manager().is_memory_locking_enabled());
+        
+        // Re-enable and verify
+        server.enable_secure_memory()?;
+        #[cfg(feature = "memory-lock")]
+        assert!(server.session().memory_manager().is_memory_locking_enabled());
         
         Ok(())
     }

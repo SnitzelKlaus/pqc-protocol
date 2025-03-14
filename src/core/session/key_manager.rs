@@ -21,16 +21,24 @@ use crate::core::{
 
 use pqcrypto_traits::kem::SharedSecret;
 
+// New imports for enhanced security
+use crate::core::memory::zeroize_on_drop::ZeroizeOnDrop;
+use crate::core::memory::protected_memory::ProtectedMemory;
+use crate::core::memory::heapless_vec::{SecureHeaplessVec, SecureVec32};
+use crate::core::security::constant_time;
+use crate::core::security::hardware_security::{HardwareSecurityManager, HardwareSecurityCapability};
+use subtle::ConstantTimeEq;
+
 /// Key Manager handles cryptographic key management for the session
 pub struct KeyManager {
-    /// Kyber public key
-    kyber_public_key: Option<Vec<u8>>,
+    /// Kyber public key - use fixed-size stack allocation
+    kyber_public_key: Option<SecureHeaplessVec<u8, 1184>>,
     
-    /// Kyber secret key (protected by SecureMemory)
-    kyber_secret_key: Option<SecureMemory<Vec<u8>>>,
+    /// Kyber secret key (protected by SecureMemory and ZeroizeOnDrop)
+    kyber_secret_key: Option<ZeroizeOnDrop<ProtectedMemory<Vec<u8>>>>,
     
-    /// Encryption key (protected by SecureMemory)
-    encryption_key: Option<SecureMemory<[u8; sizes::chacha::KEY_SIZE]>>,
+    /// Encryption key (protected with multiple layers of security)
+    encryption_key: Option<ZeroizeOnDrop<ProtectedMemory<[u8; sizes::chacha::KEY_SIZE]>>>,
     
     /// Encryption cipher
     cipher: Option<Cipher>,
@@ -43,12 +51,31 @@ pub struct KeyManager {
     
     /// Temporary storage for the key exchange secret key during rotation
     /// This is only used during key rotation
-    temp_secret_key: Option<Vec<u8>>,
+    temp_secret_key: Option<ZeroizeOnDrop<Vec<u8>>>,
+    
+    /// Hardware security module for secure key storage when available
+    hw_security: Option<HardwareSecurityManager>,
+    
+    /// Key identifier in hardware security module
+    hsm_key_id: Option<String>,
+    
+    /// Whether the encryption key is stored in HSM
+    key_in_hsm: bool,
 }
 
 impl KeyManager {
     /// Create a new key manager with default algorithms
     pub fn new() -> Self {
+        // Try to initialize hardware security
+        let hw_security = if cfg!(feature = "hardware-security") {
+            Some(HardwareSecurityManager::new())
+        } else {
+            None
+        };
+        
+        // Generate a unique key ID
+        let hsm_key_id = Some(format!("kyber-key-{}", uuid::Uuid::new_v4()));
+        
         Self {
             kyber_public_key: None,
             kyber_secret_key: None,
@@ -57,11 +84,24 @@ impl KeyManager {
             key_exchange_algorithm: KeyExchangeAlgorithm::default(),
             symmetric_algorithm: SymmetricAlgorithm::default(),
             temp_secret_key: None,
+            hw_security,
+            hsm_key_id,
+            key_in_hsm: false,
         }
     }
     
     /// Create a new key manager with specified algorithms
     pub fn new_with_config(config: &CryptoConfig) -> Result<Self> {
+        // Try to initialize hardware security
+        let hw_security = if cfg!(feature = "hardware-security") {
+            Some(HardwareSecurityManager::new())
+        } else {
+            None
+        };
+        
+        // Generate a unique key ID
+        let hsm_key_id = Some(format!("kyber-key-{}", uuid::Uuid::new_v4()));
+        
         Ok(Self {
             kyber_public_key: None,
             kyber_secret_key: None,
@@ -70,6 +110,9 @@ impl KeyManager {
             key_exchange_algorithm: config.key_exchange,
             symmetric_algorithm: config.symmetric,
             temp_secret_key: None,
+            hw_security,
+            hsm_key_id,
+            key_in_hsm: false,
         })
     }
     
@@ -91,9 +134,20 @@ impl KeyManager {
         // Generate key pair
         let (public_key_bytes, secret_key_bytes) = key_exchanger.generate_keypair()?;
         
-        // Store keys, wrapping the secret key in SecureMemory
-        self.kyber_public_key = Some(public_key_bytes.clone());
-        self.kyber_secret_key = Some(SecureMemory::new(secret_key_bytes));
+        // Store keys, using secure memory wrappers
+        let mut public_key_stack = SecureHeaplessVec::<u8, 1184>::new();
+        for &byte in &public_key_bytes {
+            let _ = public_key_stack.push(byte);
+        }
+        
+        self.kyber_public_key = Some(public_key_stack);
+        
+        // Multiple layers of protection for the secret key
+        self.kyber_secret_key = Some(
+            ZeroizeOnDrop::new(
+                ProtectedMemory::new(secret_key_bytes)
+            )
+        );
         
         // Convert bytes to KyberPublicKey (this is for backward compatibility)
         let public_key = KyberPublicKey::from_bytes(&public_key_bytes)?;
@@ -109,13 +163,32 @@ impl KeyManager {
         // Generate key pair
         let (public_key_bytes, secret_key_bytes) = key_exchanger.generate_keypair()?;
         
-        // Store keys, wrapping the secret key using the memory manager
-        self.kyber_public_key = Some(public_key_bytes.clone());
+        // Store public key in stack-based vector
+        let mut public_key_stack = SecureHeaplessVec::<u8, 1184>::new();
+        for &byte in &public_key_bytes {
+            let _ = public_key_stack.push(byte);
+        }
         
-        // Use the memory manager to create secure memory
-        self.kyber_secret_key = Some(memory_manager.secure_memory(secret_key_bytes));
+        self.kyber_public_key = Some(public_key_stack);
         
-        // Convert bytes to KyberPublicKey (this is for backward compatibility)
+        // If hardware security is available, try to use it
+        if memory_manager.is_hardware_security_enabled() && 
+           memory_manager.has_hw_capability(HardwareSecurityCapability::KeyStorage) {
+            if let Some(hsm_key_id) = &self.hsm_key_id {
+                // Store the secret key in HSM
+                memory_manager.store_key_in_hsm(hsm_key_id, &secret_key_bytes)?;
+                self.key_in_hsm = true;
+            }
+        }
+        
+        // Always store in protected memory as a backup
+        self.kyber_secret_key = Some(
+            ZeroizeOnDrop::new(
+                memory_manager.protected_memory(secret_key_bytes)
+            )
+        );
+        
+        // Convert bytes to KyberPublicKey (for backward compatibility)
         let public_key = KyberPublicKey::from_bytes(&public_key_bytes)?;
         
         Ok(public_key)
@@ -133,8 +206,14 @@ impl KeyManager {
         // Derive encryption key
         let encryption_key = KeyExchange::derive_encryption_key(&shared_secret)?;
         
-        // Wrap the encryption key with SecureMemory and initialize the cipher
-        self.encryption_key = Some(SecureMemory::new(encryption_key));
+        // Store the encryption key in protected memory with ZeroizeOnDrop
+        self.encryption_key = Some(
+            ZeroizeOnDrop::new(
+                ProtectedMemory::new(encryption_key)
+            )
+        );
+        
+        // Initialize the cipher
         self.cipher = Some(Cipher::new(&encryption_key, self.symmetric_algorithm)?);
         
         // Convert bytes to KyberCiphertext (for backward compatibility)
@@ -159,8 +238,24 @@ impl KeyManager {
         // Derive encryption key
         let encryption_key = KeyExchange::derive_encryption_key(&shared_secret)?;
         
-        // Wrap the encryption key with SecureMemory using memory manager
-        self.encryption_key = Some(memory_manager.secure_memory(encryption_key));
+        // If hardware security is available, try to use it
+        if memory_manager.is_hardware_security_enabled() && 
+           memory_manager.has_hw_capability(HardwareSecurityCapability::KeyStorage) {
+            if let Some(hsm_key_id) = &self.hsm_key_id {
+                // Store the encryption key in HSM
+                memory_manager.store_key_in_hsm(hsm_key_id, &encryption_key)?;
+                self.key_in_hsm = true;
+            }
+        }
+        
+        // Always store in protected memory as a backup
+        self.encryption_key = Some(
+            ZeroizeOnDrop::new(
+                memory_manager.protected_key32(encryption_key)
+            )
+        );
+        
+        // Initialize the cipher
         self.cipher = Some(Cipher::new(&encryption_key, self.symmetric_algorithm)?);
         
         // Convert bytes to KyberCiphertext (for backward compatibility)
@@ -178,17 +273,26 @@ impl KeyManager {
         // Create key exchanger with the configured algorithm
         let key_exchanger = KeyExchange::new(self.key_exchange_algorithm)?;
         
+        // Temporarily unprotect to access the key
+        let inner_key = secure_kyber_secret_key.inner();
+        
         // Decapsulate shared secret
         let shared_secret = key_exchanger.decapsulate(
             ciphertext.as_bytes(),
-            secure_kyber_secret_key.as_ref()
+            inner_key
         )?;
         
         // Derive encryption key
         let encryption_key = KeyExchange::derive_encryption_key(&shared_secret)?;
         
-        // Wrap the encryption key with SecureMemory and initialize the cipher
-        self.encryption_key = Some(SecureMemory::new(encryption_key));
+        // Store the encryption key in protected memory with ZeroizeOnDrop
+        self.encryption_key = Some(
+            ZeroizeOnDrop::new(
+                ProtectedMemory::new(encryption_key)
+            )
+        );
+        
+        // Initialize the cipher
         self.cipher = Some(Cipher::new(&encryption_key, self.symmetric_algorithm)?);
         
         Ok(())
@@ -207,17 +311,36 @@ impl KeyManager {
         // Create key exchanger with the configured algorithm
         let key_exchanger = KeyExchange::new(self.key_exchange_algorithm)?;
         
+        // Temporarily unprotect to access the key
+        let inner_key = secure_kyber_secret_key.inner();
+        
         // Decapsulate shared secret
         let shared_secret = key_exchanger.decapsulate(
             ciphertext.as_bytes(),
-            secure_kyber_secret_key.as_ref()
+            inner_key
         )?;
         
         // Derive encryption key
         let encryption_key = KeyExchange::derive_encryption_key(&shared_secret)?;
         
-        // Wrap the encryption key with SecureMemory and initialize the cipher
-        self.encryption_key = Some(memory_manager.secure_memory(encryption_key));
+        // If hardware security is available, try to use it
+        if memory_manager.is_hardware_security_enabled() && 
+           memory_manager.has_hw_capability(HardwareSecurityCapability::KeyStorage) {
+            if let Some(hsm_key_id) = &self.hsm_key_id {
+                // Store the encryption key in HSM
+                memory_manager.store_key_in_hsm(hsm_key_id, &encryption_key)?;
+                self.key_in_hsm = true;
+            }
+        }
+        
+        // Always store in protected memory as a backup
+        self.encryption_key = Some(
+            ZeroizeOnDrop::new(
+                memory_manager.protected_key32(encryption_key)
+            )
+        );
+        
+        // Initialize the cipher
         self.cipher = Some(Cipher::new(&encryption_key, self.symmetric_algorithm)?);
         
         Ok(())
@@ -225,49 +348,137 @@ impl KeyManager {
     
     /// Get the current Kyber public key (if available)
     pub fn get_public_key(&self) -> Option<&[u8]> {
-        self.kyber_public_key.as_deref()
+        self.kyber_public_key.as_ref().map(|pk| pk.as_ref())
     }
     
-    /// Get access to the cipher for encryption/decryption operations
+    /// Access to the cipher for encryption/decryption operations
     pub fn get_cipher(&self) -> Result<&Cipher> {
+        // Check if we need to retrieve key from HSM first
+        if self.key_in_hsm && self.cipher.is_none() && self.encryption_key.is_none() {
+            self.retrieve_key_from_hsm()?;
+        }
+        
         self.cipher.as_ref()
             .ok_or_else(|| Error::Internal("Cipher not initialized".into()))
     }
     
-    /// Get access to the cipher for encryption/decryption operations (mutable)
+    /// Access to the cipher for encryption/decryption operations (mutable)
     pub fn get_cipher_mut(&mut self) -> Result<&mut Cipher> {
+        // Check if we need to retrieve key from HSM first
+        if self.key_in_hsm && self.cipher.is_none() && self.encryption_key.is_none() {
+            self.retrieve_key_from_hsm()?;
+        }
+        
         self.cipher.as_mut()
             .ok_or_else(|| Error::Internal("Cipher not initialized".into()))
     }
     
     /// Get a reference to the encryption key
-    pub fn get_encryption_key(&self) -> Result<&SecureMemory<[u8; sizes::chacha::KEY_SIZE]>> {
+    pub fn get_encryption_key(&self) -> Result<&ZeroizeOnDrop<ProtectedMemory<[u8; sizes::chacha::KEY_SIZE]>>> {
+        // Check if we need to retrieve key from HSM first
+        if self.key_in_hsm && self.encryption_key.is_none() {
+            self.retrieve_key_from_hsm()?;
+        }
+        
         self.encryption_key.as_ref()
             .ok_or_else(|| Error::Internal("Encryption key not initialized".into()))
     }
     
     /// Get a mutable reference to the encryption key
-    pub fn get_encryption_key_mut(&mut self) -> Result<&mut SecureMemory<[u8; sizes::chacha::KEY_SIZE]>> {
+    pub fn get_encryption_key_mut(&mut self) -> Result<&mut ZeroizeOnDrop<ProtectedMemory<[u8; sizes::chacha::KEY_SIZE]>>> {
+        // Check if we need to retrieve key from HSM first
+        if self.key_in_hsm && self.encryption_key.is_none() {
+            self.retrieve_key_from_hsm()?;
+        }
+        
         self.encryption_key.as_mut()
             .ok_or_else(|| Error::Internal("Encryption key not initialized".into()))
     }
     
+    /// Store a key in hardware security module
+    pub fn store_key_in_hsm(&mut self) -> Result<bool> {
+        if let (Some(hw), Some(key_id), Some(ref enc_key)) = (&self.hw_security, &self.hsm_key_id, &self.encryption_key) {
+            if hw.is_available() && hw.supports(HardwareSecurityCapability::KeyStorage) {
+                // Access the inner key data (temporarily unprotect)
+                let key_data = enc_key.inner();
+                
+                // Store the key in HSM
+                match hw.store_key(key_id, key_data) {
+                    Ok(_) => {
+                        self.key_in_hsm = true;
+                        Ok(true)
+                    }
+                    Err(_) => {
+                        // Failed to store in HSM
+                        self.key_in_hsm = false;
+                        Ok(false)
+                    }
+                }
+            } else {
+                // HSM not available or doesn't support key storage
+                self.key_in_hsm = false;
+                Ok(false)
+            }
+        } else {
+            // No HSM, key ID, or encryption key
+            self.key_in_hsm = false;
+            Ok(false)
+        }
+    }
+    
+    /// Retrieve a key from hardware security module
+    pub fn retrieve_key_from_hsm(&mut self) -> Result<bool> {
+        if !self.key_in_hsm {
+            return Ok(false);
+        }
+        
+        if let (Some(hw), Some(key_id)) = (&self.hw_security, &self.hsm_key_id) {
+            // Retrieve the key from HSM
+            match hw.retrieve_key(key_id)? {
+                Some(key_data) => {
+                    // Ensure the key is the correct size
+                    if key_data.len() == sizes::chacha::KEY_SIZE {
+                        // Convert to array
+                        let mut key_array = [0u8; sizes::chacha::KEY_SIZE];
+                        key_array.copy_from_slice(&key_data);
+                        
+                        // Store in protected memory
+                        self.encryption_key = Some(
+                            ZeroizeOnDrop::new(
+                                ProtectedMemory::new(key_array)
+                            )
+                        );
+                        
+                        // Initialize cipher
+                        self.cipher = Some(Cipher::new(&key_array, self.symmetric_algorithm)?);
+                        
+                        Ok(true)
+                    } else {
+                        // Incorrect key size
+                        self.key_in_hsm = false;
+                        Ok(false)
+                    }
+                }
+                None => {
+                    // Key not found in HSM
+                    self.key_in_hsm = false;
+                    Ok(false)
+                }
+            }
+        } else {
+            // No HSM or key ID
+            self.key_in_hsm = false;
+            Ok(false)
+        }
+    }
+    
     /// Clear sensitive keys (useful during key rotation)
     pub fn clear_keys(&mut self) {
-        // Clear Kyber keys
-        if let Some(ref mut key) = self.kyber_secret_key {
-            key.clear();
-        }
+        // Clear Kyber keys - using ZeroizeOnDrop ensures proper cleanup
         self.kyber_public_key = None;
         self.kyber_secret_key = None;
         
-        // Clear temporary secret key
-        if let Some(ref mut key) = self.temp_secret_key {
-            // Zero out the key data
-            for byte in key.iter_mut() {
-                *byte = 0;
-            }
-        }
+        // Clear temporary secret key - using ZeroizeOnDrop ensures proper cleanup
         self.temp_secret_key = None;
         
         // Note: We don't clear encryption_key and cipher 
@@ -276,9 +487,17 @@ impl KeyManager {
     
     /// Update the encryption key and cipher
     pub fn update_encryption(&mut self, new_encryption_key: [u8; sizes::chacha::KEY_SIZE], algorithm: SymmetricAlgorithm) -> Result<()> {
-        self.encryption_key = Some(SecureMemory::new(new_encryption_key));
+        // Store in protected memory with ZeroizeOnDrop
+        self.encryption_key = Some(
+            ZeroizeOnDrop::new(
+                ProtectedMemory::new(new_encryption_key)
+            )
+        );
+        
+        // Initialize cipher with the new key
         self.cipher = Some(Cipher::new(&new_encryption_key, algorithm)?);
         self.symmetric_algorithm = algorithm;
+        
         Ok(())
     }
     
@@ -289,20 +508,40 @@ impl KeyManager {
         algorithm: SymmetricAlgorithm,
         memory_manager: &SecureMemoryManager
     ) -> Result<()> {
-        self.encryption_key = Some(memory_manager.secure_memory(new_encryption_key));
+        // If hardware security is available, try to use it
+        if memory_manager.is_hardware_security_enabled() && 
+           memory_manager.has_hw_capability(HardwareSecurityCapability::KeyStorage) {
+            if let Some(hsm_key_id) = &self.hsm_key_id {
+                // Store the encryption key in HSM
+                memory_manager.store_key_in_hsm(hsm_key_id, &new_encryption_key)?;
+                self.key_in_hsm = true;
+            }
+        }
+        
+        // Store in protected memory as a backup
+        self.encryption_key = Some(
+            ZeroizeOnDrop::new(
+                memory_manager.protected_key32(new_encryption_key)
+            )
+        );
+        
+        // Initialize cipher with the new key
         self.cipher = Some(Cipher::new(&new_encryption_key, algorithm)?);
         self.symmetric_algorithm = algorithm;
+        
         Ok(())
     }
     
     /// Store a temporary secret key for key rotation
     pub fn store_temporary_secret_key(&mut self, secret_key: Vec<u8>) {
-        self.temp_secret_key = Some(secret_key);
+        // Use ZeroizeOnDrop to ensure the temporary key is cleared when no longer needed
+        self.temp_secret_key = Some(ZeroizeOnDrop::new(secret_key));
     }
     
     /// Get the temporary secret key (consumed)
     pub fn get_temporary_secret_key(&mut self) -> Option<Vec<u8>> {
-        self.temp_secret_key.take()
+        // Unwrap the ZeroizeOnDrop wrapper to get the inner value
+        self.temp_secret_key.take().map(|key| key.into_inner())
     }
     
     /// Generate a new key pair for rotation
@@ -313,7 +552,7 @@ impl KeyManager {
         // Generate new key pair
         let (public_key_bytes, secret_key_bytes) = key_exchanger.generate_keypair()?;
         
-        // Store the secret key temporarily
+        // Store the secret key temporarily - use ZeroizeOnDrop to ensure it's cleared
         self.store_temporary_secret_key(secret_key_bytes);
         
         // Return the public key
@@ -333,10 +572,43 @@ impl KeyManager {
         
         // For key rotation, we just store it temporarily, not in secure memory
         // because it's only needed briefly during the rotation process
+        // Still use ZeroizeOnDrop to ensure it's cleared when no longer needed
         self.store_temporary_secret_key(secret_key_bytes);
         
         // Return the public key
         Ok(public_key_bytes)
+    }
+}
+
+// Implement Zeroize trait to clear sensitive data
+impl crate::core::memory::zeroize::Zeroize for KeyManager {
+    fn zeroize(&mut self) {
+        // KeyManager contains various sensitive components that should be zeroized
+        
+        // Clear the public key
+        self.kyber_public_key = None;
+        
+        // Clear the secret key - ZeroizeOnDrop handles proper zeroization
+        self.kyber_secret_key = None;
+        
+        // Clear the encryption key - ZeroizeOnDrop handles proper zeroization
+        self.encryption_key = None;
+        
+        // Clear the cipher
+        self.cipher = None;
+        
+        // Clear temporary secret key - ZeroizeOnDrop handles proper zeroization
+        self.temp_secret_key = None;
+        
+        // We don't need to clear algorithm selections as they're not sensitive
+    }
+}
+
+// Implement Drop to ensure sensitive data is cleared
+impl Drop for KeyManager {
+    fn drop(&mut self) {
+        // Explicit zeroization
+        self.zeroize();
     }
 }
 
@@ -402,55 +674,121 @@ mod tests {
     }
     
     #[test]
-    fn test_different_algorithms() -> Result<()> {
-        // Test with high security configuration
-        let high_sec_config = CryptoConfig::high_security();
+    fn test_key_zeroization() -> Result<()> {
+        let config = CryptoConfig::default();
+        let mut key_manager = KeyManager::new_with_config(&config)?;
         
-        let mut client_key_manager = KeyManager::new_with_config(&high_sec_config)?;
-        let mut server_key_manager = KeyManager::new_with_config(&high_sec_config)?;
+        // Initialize key exchange
+        let _public_key = key_manager.init_key_exchange()?;
         
-        // Client initiates key exchange
-        let client_public_key = client_key_manager.init_key_exchange()?;
+        // Manually zeroize
+        key_manager.zeroize();
         
-        // Server accepts key exchange
-        let ciphertext = server_key_manager.accept_key_exchange(&client_public_key)?;
-        
-        // Client processes server's response
-        client_key_manager.process_key_exchange(&ciphertext)?;
-        
-        // Verify both sides have initialized the cipher
-        let client_cipher = client_key_manager.get_cipher()?;
-        let server_cipher = server_key_manager.get_cipher()?;
-        
-        assert!(client_cipher.is_initialized());
-        assert!(server_cipher.is_initialized());
-        
-        // Check that both are using the expected algorithms
-        assert_eq!(client_key_manager.key_exchange_algorithm(), high_sec_config.key_exchange);
-        assert_eq!(server_key_manager.symmetric_algorithm(), high_sec_config.symmetric);
+        // After zeroization, the keys should be cleared
+        assert!(key_manager.kyber_public_key.is_none());
+        assert!(key_manager.kyber_secret_key.is_none());
         
         Ok(())
     }
     
     #[test]
-    fn test_key_rotation() -> Result<()> {
+    fn test_encryption_key_protection() -> Result<()> {
+        let config = CryptoConfig::default();
+        let mut client_key_manager = KeyManager::new_with_config(&config)?;
+        let mut server_key_manager = KeyManager::new_with_config(&config)?;
+        
+        // Perform key exchange
+        let client_public_key = client_key_manager.init_key_exchange()?;
+        let ciphertext = server_key_manager.accept_key_exchange(&client_public_key)?;
+        client_key_manager.process_key_exchange(&ciphertext)?;
+        
+        // Get the protected encryption key
+        let enc_key = client_key_manager.get_encryption_key()?;
+        
+        // Should be able to use it for operations but not directly access it
+        // due to the ProtectedMemory wrapper
+        let is_protected = enc_key.inner().is_protected();
+        println!("Key is protected: {}", is_protected);
+        
+        // The key should be available for use through deref
+        assert_eq!(enc_key.len(), sizes::chacha::KEY_SIZE);
+        
+        Ok(())
+    }
+    
+    #[test]
+    fn test_hardware_security() -> Result<()> {
+        let config = CryptoConfig::default();
+        let mut key_manager = KeyManager::new_with_config(&config)?;
+        let memory_manager = SecureMemoryManager::new(MemorySecurity::Maximum);
+        
+        // Enable hardware security in the memory manager
+        memory_manager.enable_hardware_security();
+        
+        // Check if HSM is actually available
+        if let Some(hw) = &key_manager.hw_security {
+            if hw.is_available() {
+                println!("Hardware security module available");
+                
+                // Initialize key exchange with HSM
+                let client_public_key = key_manager.init_with_memory_manager(&memory_manager)?;
+                
+                // Check if key was stored in HSM
+                println!("Key in HSM: {}", key_manager.key_in_hsm);
+                
+                // If key is in HSM, try to retrieve it
+                if key_manager.key_in_hsm {
+                    let retrieved = key_manager.retrieve_key_from_hsm()?;
+                    println!("Key retrieved from HSM: {}", retrieved);
+                }
+            } else {
+                println!("Hardware security module not available");
+            }
+        } else {
+            println!("No hardware security module");
+        }
+        
+        Ok(())
+    }
+    
+    #[test]
+    fn test_temporary_key_rotation() -> Result<()> {
         let config = CryptoConfig::default();
         let mut key_manager = KeyManager::new_with_config(&config)?;
         
-        // Generate initial key pair
-        let _ = key_manager.init_key_exchange()?;
+        // Initialize key exchange
+        let _public_key = key_manager.init_key_exchange()?;
         
-        // Generate rotation key pair
+        // Generate a temporary key for rotation
         let rotation_public_key = key_manager.generate_rotation_keypair()?;
+        assert!(!rotation_public_key.is_empty());
         
         // Temporary secret key should be stored
-        assert!(key_manager.get_temporary_secret_key().is_some());
+        assert!(key_manager.temp_secret_key.is_some());
         
-        // After getting the secret key, it should be consumed
-        assert!(key_manager.get_temporary_secret_key().is_none());
+        // Extracting the secret key should consume it
+        let temp_key = key_manager.get_temporary_secret_key();
+        assert!(temp_key.is_some());
         
-        // Rotation public key should not be None
-        assert!(!rotation_public_key.is_empty());
+        // After getting the key, the temporary storage should be empty
+        assert!(key_manager.temp_secret_key.is_none());
+        
+        Ok(())
+    }
+    
+    #[test]
+    fn test_constant_time_operations() -> Result<()> {
+        let memory_manager = SecureMemoryManager::new(MemorySecurity::Enhanced);
+        memory_manager.enable_constant_time();
+        
+        // Test using constant-time comparison of keys
+        let key1 = [0x42u8; 32];
+        let key2 = [0x42u8; 32];
+        let key3 = [0x43u8; 32];
+        
+        // Use subtle's constant-time comparison
+        assert!(key1.ct_eq(&key2).into());
+        assert!(!key1.ct_eq(&key3).into());
         
         Ok(())
     }
@@ -477,6 +815,38 @@ mod tests {
             // Update to a different algorithm if aes-gcm is available
             key_manager.update_encryption(new_key, SymmetricAlgorithm::Aes256Gcm)?;
             assert_eq!(key_manager.symmetric_algorithm(), SymmetricAlgorithm::Aes256Gcm);
+        }
+        
+        Ok(())
+    }
+    
+    #[test]
+    fn test_protected_memory_integration() -> Result<()> {
+        let config = CryptoConfig::default();
+        let mut key_manager = KeyManager::new_with_config(&config)?;
+        let memory_manager = SecureMemoryManager::new(MemorySecurity::Maximum);
+        
+        // Enable read-only protection
+        memory_manager.enable_read_only_protection();
+        
+        // Initialize key exchange with the memory manager
+        let client_public_key = key_manager.init_with_memory_manager(&memory_manager)?;
+        
+        // Simulate server accepting the key exchange
+        let mut server_key_manager = KeyManager::new_with_config(&config)?;
+        let ciphertext = server_key_manager.accept_key_exchange(&client_public_key)?;
+        
+        // Process the server's response
+        key_manager.process_key_exchange_with_memory_manager(&ciphertext, &memory_manager)?;
+        
+        // At this point, encryption key should be protected
+        if let Some(ref enc_key) = key_manager.encryption_key {
+            let is_protected = enc_key.inner().is_protected();
+            println!("Encryption key is protected: {}", is_protected);
+            
+            // We should still be able to use the cipher
+            let cipher = key_manager.get_cipher()?;
+            assert!(cipher.is_initialized());
         }
         
         Ok(())

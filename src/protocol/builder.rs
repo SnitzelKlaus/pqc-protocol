@@ -10,7 +10,7 @@ use crate::core::{
     error::Result,
     crypto::config::{CryptoConfig, KeyExchangeAlgorithm, SignatureAlgorithm, SymmetricAlgorithm},
     session::state::Role,
-    memory::{MemorySecurity, MemoryConfig},
+    memory::{MemorySecurity, MemoryConfig, Platform, for_current_platform, auto_detect_platform},
 };
 
 // Import the client and server implementations
@@ -144,6 +144,12 @@ impl PqcProtocolBuilder {
         self
     }
     
+    /// Enable or disable zeroing memory on free
+    pub fn with_zero_on_free(mut self, enable: bool) -> Self {
+        self.memory_config = self.memory_config.with_zero_on_free(enable);
+        self
+    }
+    
     /// Build a synchronous client
     pub fn build_client(self) -> Result<PqcClient> {
         let mut client = PqcClient::with_config(self.config.clone())?;
@@ -207,7 +213,7 @@ impl Default for PqcProtocolBuilder {
 
 /// Create a client with automatically detected platform settings
 pub fn client_for_platform() -> Result<PqcClient> {
-    let config = crate::memory::for_current_platform();
+    let config = for_current_platform();
     
     PqcProtocolBuilder::new()
         .with_memory_config(config)
@@ -216,7 +222,7 @@ pub fn client_for_platform() -> Result<PqcClient> {
 
 /// Create a server with automatically detected platform settings
 pub fn server_for_platform() -> Result<PqcServer> {
-    let config = crate::memory::for_current_platform();
+    let config = for_current_platform();
     
     PqcProtocolBuilder::new()
         .as_server()
@@ -227,7 +233,7 @@ pub fn server_for_platform() -> Result<PqcServer> {
 #[cfg(feature = "async")]
 /// Create an async client with automatically detected platform settings
 pub async fn async_client_for_platform() -> Result<AsyncPqcClient> {
-    let config = crate::memory::for_current_platform();
+    let config = for_current_platform();
     
     PqcProtocolBuilder::new()
         .with_memory_config(config)
@@ -238,7 +244,7 @@ pub async fn async_client_for_platform() -> Result<AsyncPqcClient> {
 #[cfg(feature = "async")]
 /// Create an async server with automatically detected platform settings
 pub async fn async_server_for_platform() -> Result<AsyncPqcServer> {
-    let config = crate::memory::for_current_platform();
+    let config = for_current_platform();
     
     PqcProtocolBuilder::new()
         .as_server()
@@ -314,21 +320,33 @@ mod tests {
     fn test_memory_configuration() -> Result<()> {
         // Test standard memory configuration
         let standard_client = PqcProtocolBuilder::new().build_client()?;
+        
+        #[cfg(feature = "memory-lock")]
         assert!(standard_client.session().memory_manager().is_memory_locking_enabled());
+        
+        #[cfg(feature = "memory-canary")]
         assert!(standard_client.session().memory_manager().is_canary_protection_enabled());
         
         // Test embedded memory configuration
         let embedded_client = PqcProtocolBuilder::new()
             .for_embedded()
             .build_client()?;
+        
+        #[cfg(feature = "memory-lock")]
         assert!(!embedded_client.session().memory_manager().is_memory_locking_enabled());
+        
+        #[cfg(feature = "memory-canary")]
         assert!(!embedded_client.session().memory_manager().is_canary_protection_enabled());
         
         // Test WASM memory configuration
         let wasm_client = PqcProtocolBuilder::new()
             .for_wasm()
             .build_client()?;
+        
+        #[cfg(feature = "memory-lock")]
         assert!(!wasm_client.session().memory_manager().is_memory_locking_enabled());
+        
+        #[cfg(feature = "memory-canary")]
         assert!(wasm_client.session().memory_manager().is_canary_protection_enabled());
         
         // Test custom memory configuration
@@ -336,10 +354,48 @@ mod tests {
             .with_memory_security(MemorySecurity::Enhanced)
             .with_memory_locking(false)
             .with_canary_protection(true)
+            .with_zero_on_free(true)
             .build_client()?;
+        
+        #[cfg(feature = "memory-lock")]
         assert!(!custom_client.session().memory_manager().is_memory_locking_enabled());
+        
+        #[cfg(feature = "memory-canary")]
         assert!(custom_client.session().memory_manager().is_canary_protection_enabled());
+        
+        #[cfg(feature = "memory-zero")]
+        assert!(custom_client.session().memory_manager().is_zero_on_free_enabled());
+        
         assert_eq!(custom_client.session().memory_security_level(), MemorySecurity::Enhanced);
+        
+        Ok(())
+    }
+    
+    #[test]
+    fn test_platform_detection() -> Result<()> {
+        // Test platform detection
+        let platform = auto_detect_platform();
+        let config = for_current_platform();
+        
+        // Ensure the config matches the detected platform
+        match platform {
+            Platform::Embedded => {
+                // Memory locking should be disabled for embedded
+                assert!(!config.with_memory_locking(true).with_memory_locking(false)
+                    .create_manager().is_memory_locking_enabled());
+            },
+            Platform::Wasm => {
+                // Memory locking should be disabled for WASM
+                assert!(!config.with_memory_locking(true).with_memory_locking(false)
+                    .create_manager().is_memory_locking_enabled());
+            },
+            Platform::Mobile | Platform::Standard => {
+                // These platforms should support memory locking if feature is enabled
+                #[cfg(feature = "memory-lock")]
+                assert!(config.with_memory_locking(true)
+                    .create_manager().is_memory_locking_enabled());
+            },
+        }
         
         Ok(())
     }
@@ -364,7 +420,7 @@ mod tests {
     #[cfg(feature = "async")]
     #[tokio::test]
     async fn test_async_memory_config() -> Result<()> {
-        // This is a bit tricker to test with the async API
+        // This is a bit trickier to test with the async API
         let client = PqcProtocolBuilder::new()
             .with_memory_security(MemorySecurity::Maximum)
             .build_async_client()

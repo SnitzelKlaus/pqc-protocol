@@ -14,7 +14,7 @@ use crate::core::{
         DilithiumPublicKey, 
         DilithiumSignature,
     },
-    memory::SecureMemory,
+    memory::{SecureMemory, SecureVec, Zeroize},
 };
 use crate::auth_err;
 
@@ -156,6 +156,25 @@ impl AuthManager {
     pub fn signature_size(&self) -> usize {
         self.auth.signature_size()
     }
+    
+    /// Create a signature from bytes
+    pub fn signature_from_bytes(&self, bytes: &[u8]) -> Result<DilithiumSignature> {
+        DilithiumSignature::from_bytes(bytes)
+            .map_err(|_| Error::Authentication(AuthError::InvalidSignatureFormat))
+    }
+    
+    /// Zeroize sensitive data
+    pub fn zeroize_sensitive_data(&mut self) {
+        // Zeroize the secret key
+        self.secret_key.zeroize();
+    }
+}
+
+// Implement Zeroize trait for AuthManager
+impl Zeroize for AuthManager {
+    fn zeroize(&mut self) {
+        self.zeroize_sensitive_data();
+    }
 }
 
 #[cfg(test)]
@@ -253,6 +272,19 @@ mod tests {
         
         // Check algorithm is as expected
         assert_eq!(alice.signature_algorithm(), high_sec_config.signature);
+        
+        Ok(())
+    }
+    
+    #[test]
+    fn test_zeroize() -> Result<()> {
+        let mut auth_manager = AuthManager::new()?;
+        
+        // Test zeroization
+        auth_manager.zeroize();
+        
+        // Secret key should be zeroed but still in a valid state
+        assert!(auth_manager.sign(b"Test").is_ok());
         
         Ok(())
     }

@@ -10,6 +10,7 @@ use crate::core::{
     session::{PqcSession, state::{Role, SessionState}},
     constants::MAX_CHUNK_SIZE,
     crypto::config::CryptoConfig,
+    memory::{SecureMemory, Zeroize, SecureVec, SecureSession},
 };
 use super::common;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -60,12 +61,29 @@ impl AsyncPqcServer {
     
     /// Create a lightweight server for resource-constrained environments.
     pub async fn lightweight() -> Result<Self> {
-        Self::with_config(CryptoConfig::lightweight()).await
+        let server = Self::with_config(CryptoConfig::lightweight()).await?;
+        
+        // Apply lightweight memory settings
+        server.with_session(|session| async move {
+            session.disable_secure_memory();
+            Ok(())
+        }).await?;
+        
+        Ok(server)
     }
     
     /// Create a high-security server with stronger cryptographic settings.
     pub async fn high_security() -> Result<Self> {
-        Self::with_config(CryptoConfig::high_security()).await
+        let server = Self::with_config(CryptoConfig::high_security()).await?;
+        
+        // Apply high security memory settings
+        server.with_session(|session| async move {
+            session.set_memory_security_level(crate::core::memory::MemorySecurity::Maximum);
+            session.enable_secure_memory();
+            Ok(())
+        }).await?;
+        
+        Ok(server)
     }
     
     /// Create a hardware-optimized server that takes advantage of acceleration.
@@ -78,12 +96,24 @@ impl AsyncPqcServer {
     /// This is useful for embedded platforms with limited resources.
     pub async fn disable_secure_memory(&mut self) -> Result<()> {
         self.secure_memory_enabled = false;
+        
+        self.with_session(|session| async move {
+            session.disable_secure_memory();
+            Ok(())
+        }).await?;
+        
         Ok(())
     }
     
     /// Enable secure memory management.
     pub async fn enable_secure_memory(&mut self) -> Result<()> {
         self.secure_memory_enabled = true;
+        
+        self.with_session(|session| async move {
+            session.enable_secure_memory();
+            Ok(())
+        }).await?;
+        
         Ok(())
     }
     
@@ -224,6 +254,10 @@ impl AsyncPqcServer {
         // In the async version, we can't replace the session directly
         // Instead, we'll try to reset it to a new state if possible
         if let Ok(mut session) = self.session.lock() {
+            // Call the secure session's erase method
+            session.erase_sensitive_memory();
+            
+            // Optionally replace with a new session
             if let Ok(new_session) = PqcSession::new() {
                 // Replace the session contents
                 *session = new_session;
@@ -249,6 +283,16 @@ impl AsyncPqcServer {
         // Drop the lock before awaiting to avoid deadlocks
         drop(session);
         future.await
+    }
+}
+
+// Implement Zeroize trait for AsyncPqcServer
+impl Zeroize for AsyncPqcServer {
+    fn zeroize(&mut self) {
+        // Use internal zeroization for async context
+        if let Ok(mut session) = self.session.lock() {
+            session.erase_sensitive_memory();
+        }
     }
 }
 
@@ -285,6 +329,21 @@ mod tests {
         assert!(!server.is_memory_secure().await);
         server.enable_secure_memory().await?;
         assert!(server.is_memory_secure().await);
+        
+        // Test that the disable/enable actually affects the underlying session
+        server.with_session(|session| async move {
+            #[cfg(feature = "memory-lock")]
+            assert!(session.memory_manager().is_memory_locking_enabled());
+            Ok(())
+        }).await?;
+        
+        server.disable_secure_memory().await?;
+        
+        server.with_session(|session| async move {
+            #[cfg(feature = "memory-lock")]
+            assert!(!session.memory_manager().is_memory_locking_enabled());
+            Ok(())
+        }).await?;
         
         Ok(())
     }
@@ -340,6 +399,42 @@ mod tests {
             let decrypted = server.receive(&encrypted).await?;
             assert_eq!(test_data, &decrypted[..]);
         }
+        
+        Ok(())
+    }
+    
+    #[tokio::test]
+    async fn test_zeroize() -> Result<()> {
+        let mut server = AsyncPqcServer::new().await?;
+        
+        // Create a client and start handshake to set up some state
+        let client = AsyncPqcClient::new().await?;
+        let client_pk = client.connect().await?;
+        let _ = server.accept(&client_pk).await?;
+        
+        // Test zeroize implementation
+        server.zeroize();
+        
+        // Session should still be in a consistent state
+        assert_eq!(server.state().await?, SessionState::KeyExchangeCompleted);
+        
+        Ok(())
+    }
+    
+    #[tokio::test]
+    async fn test_zero_sensitive_memory() -> Result<()> {
+        let server = AsyncPqcServer::new().await?;
+        
+        // Create a client and start handshake to set up some state
+        let client = AsyncPqcClient::new().await?;
+        let client_pk = client.connect().await?;
+        let _ = server.accept(&client_pk).await?;
+        
+        // Test manual memory zeroing
+        server.zero_sensitive_memory().await;
+        
+        // Session should be reset to a new state
+        assert_eq!(server.state().await?, SessionState::New);
         
         Ok(())
     }

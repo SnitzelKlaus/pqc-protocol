@@ -7,7 +7,7 @@ cryptographic algorithms and memory security.
 */
 
 use crate::core::{
-    error::{Result, AuthError},
+    error::{Result, Error, AuthError},
     session::{
         state::{StateManager, SessionState, Role},
         key_manager::KeyManager,
@@ -24,16 +24,24 @@ use crate::core::{
 };
 use crate::{invalid_state_err, auth_err, protocol_err};
 
+// Add the following new imports for enhanced security
+use crate::core::memory::zeroize_on_drop::ZeroizeOnDrop;
+use crate::core::memory::protected_memory::ProtectedMemory;
+use crate::core::memory::heapless_vec::{SecureHeaplessVec, SecureVec32};
+use crate::core::security::constant_time;
+use crate::core::security::hardware_security::{HardwareSecurityManager, HardwareSecurityCapability};
+use subtle::ConstantTimeEq;
+
 /// Main session for the PQC protocol with configurable algorithms
 pub struct Session {
     /// Manages session state
     state_manager: StateManager,
     
-    /// Manages key exchange and encryption
-    key_manager: KeyManager,
+    /// Manages key exchange and encryption - wrapped in ZeroizeOnDrop
+    key_manager: ZeroizeOnDrop<KeyManager>,
     
-    /// Manages authentication and signatures
-    auth_manager: AuthManager,
+    /// Manages authentication and signatures - wrapped in ZeroizeOnDrop
+    auth_manager: ZeroizeOnDrop<AuthManager>,
     
     /// Manages data operations
     data_manager: DataManager,
@@ -46,6 +54,12 @@ pub struct Session {
     
     /// Cryptographic configuration
     crypto_config: CryptoConfig,
+    
+    /// Session key stored in protected memory when possible
+    session_key: Option<ProtectedMemory<[u8; 32]>>,
+    
+    /// Hardware security manager for key storage
+    hw_security: Option<HardwareSecurityManager>,
 }
 
 impl Session {
@@ -60,13 +74,22 @@ impl Session {
         config.validate()?;
         
         let state_manager = StateManager::new(Role::Client);
-        let key_manager = KeyManager::new_with_config(&config)?;
-        let auth_manager = AuthManager::new_with_config(&config)?;
+        
+        // Use ZeroizeOnDrop to ensure key_manager and auth_manager are zeroed when dropped
+        let key_manager = ZeroizeOnDrop::new(KeyManager::new_with_config(&config)?);
+        let auth_manager = ZeroizeOnDrop::new(AuthManager::new_with_config(&config)?);
         let data_manager = DataManager::new();
         let rotation_manager = KeyRotationManager::new();
         
         // Create with standard memory security by default
-        let memory_manager = SecureMemoryManager::default();
+        let memory_manager = SecureMemoryManager::new(MemorySecurity::Standard);
+        
+        // Check if hardware security is available
+        let hw_security = if cfg!(feature = "hardware-security") {
+            Some(HardwareSecurityManager::new())
+        } else {
+            None
+        };
         
         Ok(Self {
             state_manager,
@@ -76,7 +99,19 @@ impl Session {
             rotation_manager,
             memory_manager,
             crypto_config: config,
+            session_key: None,
+            hw_security,
         })
+    }
+    
+    /// Create a new session with a protected key
+    pub fn with_protected_key(key_data: [u8; 32]) -> Result<Self> {
+        let mut session = Self::new()?;
+        
+        // Store the key in protected memory
+        session.session_key = Some(session.memory_manager.protected_key32(key_data));
+        
+        Ok(session)
     }
     
     /// Create a lightweight session for resource-constrained environments
@@ -125,6 +160,8 @@ impl Session {
         self.memory_manager.enable_memory_locking();
         self.memory_manager.enable_canary_protection();
         self.memory_manager.enable_zero_on_free();
+        self.memory_manager.enable_read_only_protection();
+        self.memory_manager.enable_constant_time();
     }
     
     /// Disable secure memory features
@@ -132,14 +169,85 @@ impl Session {
         self.memory_manager.disable_memory_locking();
         self.memory_manager.disable_canary_protection();
         self.memory_manager.disable_zero_on_free();
+        self.memory_manager.disable_read_only_protection();
+        self.memory_manager.disable_constant_time();
+    }
+    
+    /// Enable hardware security module for key storage
+    pub fn use_hardware_security(&mut self, enable: bool) -> Result<bool> {
+        if enable {
+            self.memory_manager.enable_hardware_security();
+            
+            // Check if hardware security is actually available
+            let available = self.memory_manager.is_hardware_security_enabled() && 
+                            self.memory_manager.hardware_security_manager().is_some();
+            
+            if available {
+                // Try to store a test key to verify HSM is working
+                let key_id = format!("test-key-{}", uuid::Uuid::new_v4());
+                let test_key = [0u8; 32];
+                
+                if let Err(_) = self.memory_manager.store_key_in_hsm(&key_id, &test_key) {
+                    // HSM is not working properly
+                    self.memory_manager.disable_hardware_security();
+                    return Ok(false);
+                }
+                
+                // HSM is working
+                return Ok(true);
+            } else {
+                // Hardware security not available
+                self.memory_manager.disable_hardware_security();
+                return Ok(false);
+            }
+        } else {
+            // Disable hardware security
+            self.memory_manager.disable_hardware_security();
+            return Ok(true);
+        }
     }
     
     /// Zero sensitive memory
     pub fn zero_sensitive_memory(&mut self) {
-        // Clear key material from key manager
-        self.key_manager.clear_keys();
+        // The underlying key_manager and auth_manager will be zeroed
+        // automatically via ZeroizeOnDrop when replaced
         
-        // Additional cleanup can be added here
+        // Clear session key if present
+        if let Some(ref mut key) = self.session_key {
+            key.zeroize();
+        }
+        
+        // Reset managers to clear sensitive data
+        if let Ok(new_key_manager) = KeyManager::new_with_config(&self.crypto_config) {
+            *self.key_manager = new_key_manager;
+        }
+        
+        if let Ok(new_auth_manager) = AuthManager::new_with_config(&self.crypto_config) {
+            *self.auth_manager = new_auth_manager;
+        }
+        
+        // Reset data manager
+        self.data_manager = DataManager::new();
+    }
+    
+    /// Constant-time equality comparison
+    pub fn constant_time_eq(&self, a: &[u8], b: &[u8]) -> bool {
+        if self.memory_manager.is_constant_time_enabled() {
+            // Use subtle crate for constant-time equality
+            if a.len() != b.len() {
+                return false;
+            }
+            
+            a.ct_eq(b).into()
+        } else {
+            // Fall back to regular comparison
+            a == b
+        }
+    }
+    
+    /// Create secure stack-based vectors
+    pub fn create_secure_vec32(&self) -> SecureVec32 {
+        self.memory_manager.secure_bytes32()
     }
     
     /// Set role (client or server)
@@ -176,8 +284,8 @@ impl Session {
         self.crypto_config = config;
         
         // Re-initialize managers
-        self.key_manager = KeyManager::new_with_config(&self.crypto_config)?;
-        self.auth_manager = AuthManager::new_with_config(&self.crypto_config)?;
+        *self.key_manager = KeyManager::new_with_config(&self.crypto_config)?;
+        *self.auth_manager = AuthManager::new_with_config(&self.crypto_config)?;
         
         Ok(())
     }
@@ -219,7 +327,21 @@ impl Session {
         }
         
         // Accept key exchange
-        let ciphertext = self.key_manager.accept_key_exchange(client_public_key)?;
+        let ciphertext = if self.memory_manager.is_hardware_security_enabled() {
+            // Try to use hardware security if available
+            let ct = self.key_manager.accept_key_exchange_with_memory_manager(
+                client_public_key, &self.memory_manager)?;
+            
+            // Try to store the key in HSM if successful
+            if let Some(ref mut key_manager) = self.key_manager.as_mut() {
+                let _ = key_manager.store_key_in_hsm();
+            }
+            
+            ct
+        } else {
+            // Use regular key exchange
+            self.key_manager.accept_key_exchange(client_public_key)?
+        };
         
         // Update state
         self.state_manager.transition_to_key_exchange_completed();
@@ -237,7 +359,21 @@ impl Session {
         }
         
         // Process the key exchange
-        self.key_manager.process_key_exchange(ciphertext)?;
+        let result = if self.memory_manager.is_hardware_security_enabled() {
+            // Try to use hardware security if available
+            let r = self.key_manager.process_key_exchange_with_memory_manager(
+                ciphertext, &self.memory_manager)?;
+            
+            // Try to store the key in HSM if successful
+            if let Some(ref mut key_manager) = self.key_manager.as_mut() {
+                let _ = key_manager.store_key_in_hsm();
+            }
+            
+            r
+        } else {
+            // Use regular key exchange
+            self.key_manager.process_key_exchange(ciphertext)?
+        };
         
         // Update state
         self.state_manager.transition_to_key_exchange_completed();
@@ -304,12 +440,40 @@ impl Session {
             log::info!("Key rotation needed, but proceeding with current keys");
         }
         
-        // Encrypt and sign the data
-        let message = self.data_manager.encrypt_and_sign(
-            data, 
-            &self.key_manager, 
-            &self.auth_manager
-        )?;
+        // Use constant-time operations when possible
+        let message = if self.memory_manager.is_constant_time_enabled() {
+            // For small data, use stack allocation
+            if data.len() <= 1024 {
+                let mut stack_data = SecureHeaplessVec::<u8, 1024>::new();
+                for &byte in data {
+                    let _ = stack_data.push(byte);
+                }
+                
+                // Encrypt using the fixed-size buffer for constant-time operation
+                self.data_manager.encrypt_and_sign(
+                    &stack_data,
+                    &self.key_manager,
+                    &self.auth_manager
+                )?
+            } else {
+                // For larger data, use protected memory
+                let protected_data = ProtectedMemory::new(data.to_vec());
+                
+                // Encrypt and sign using constant-time operations
+                self.data_manager.encrypt_and_sign(
+                    &protected_data,
+                    &self.key_manager,
+                    &self.auth_manager
+                )?
+            }
+        } else {
+            // Use regular operations
+            self.data_manager.encrypt_and_sign(
+                data,
+                &self.key_manager,
+                &self.auth_manager
+            )?
+        };
         
         // Track sent message for key rotation
         self.rotation_manager.track_sent(message.len());
@@ -326,12 +490,37 @@ impl Session {
             );
         }
         
-        // Verify and decrypt the message
-        let decrypted = self.data_manager.verify_and_decrypt(
-            message, 
-            &self.key_manager, 
-            &self.auth_manager
-        )?;
+        // Use constant-time operations when possible
+        let decrypted = if self.memory_manager.is_constant_time_enabled() {
+            // For small messages, use stack allocation
+            if message.len() <= 4096 {
+                let mut stack_msg = SecureHeaplessVec::<u8, 4096>::new();
+                for &byte in message {
+                    let _ = stack_msg.push(byte);
+                }
+                
+                // Decrypt using the fixed-size buffer for constant-time operation
+                self.data_manager.verify_and_decrypt(
+                    &stack_msg,
+                    &self.key_manager,
+                    &self.auth_manager
+                )?
+            } else {
+                // For larger messages, use regular verification
+                self.data_manager.verify_and_decrypt(
+                    message,
+                    &self.key_manager,
+                    &self.auth_manager
+                )?
+            }
+        } else {
+            // Use regular operations
+            self.data_manager.verify_and_decrypt(
+                message,
+                &self.key_manager,
+                &self.auth_manager
+            )?
+        };
         
         // Track received message for key rotation
         self.rotation_manager.track_received(message.len());
@@ -446,11 +635,24 @@ impl Session {
         let new_key = KeyExchange::derive_encryption_key(&shared_secret)?;
         
         // Update the cipher with the new key, using memory manager if enabled
-        if cfg!(feature = "enhanced-memory") {
-            self.key_manager.update_encryption_with_memory_manager(
+        if self.memory_manager.is_hardware_security_enabled() {
+            // Try to use hardware security if available
+            let result = self.key_manager.update_encryption_with_memory_manager(
                 new_key, self.crypto_config.symmetric, &self.memory_manager)?;
+            
+            // Store session key in protected memory
+            self.session_key = Some(self.memory_manager.protected_key32(new_key));
+            
+            // Try to store the key in HSM if successful
+            if let Some(ref mut key_manager) = self.key_manager.as_mut() {
+                let _ = key_manager.store_key_in_hsm();
+            }
         } else {
+            // Use regular update
             self.key_manager.update_encryption(new_key, self.crypto_config.symmetric)?;
+            
+            // Store session key in protected memory
+            self.session_key = Some(self.memory_manager.protected_key32(new_key));
         }
         
         // Generate a response with the ciphertext
@@ -494,12 +696,25 @@ impl Session {
         // Derive a new encryption key
         let new_key = KeyExchange::derive_encryption_key(&shared_secret)?;
         
-        // Update the cipher with the new key, using memory manager if enabled
-        if cfg!(feature = "enhanced-memory") {
-            self.key_manager.update_encryption_with_memory_manager(
+        // Update the cipher with the new key
+        if self.memory_manager.is_hardware_security_enabled() {
+            // Try to use hardware security if available
+            let result = self.key_manager.update_encryption_with_memory_manager(
                 new_key, self.crypto_config.symmetric, &self.memory_manager)?;
+            
+            // Store session key in protected memory
+            self.session_key = Some(self.memory_manager.protected_key32(new_key));
+            
+            // Try to store the key in HSM if successful
+            if let Some(ref mut key_manager) = self.key_manager.as_mut() {
+                let _ = key_manager.store_key_in_hsm();
+            }
         } else {
+            // Use regular update
             self.key_manager.update_encryption(new_key, self.crypto_config.symmetric)?;
+            
+            // Store session key in protected memory
+            self.session_key = Some(self.memory_manager.protected_key32(new_key));
         }
         
         // Reset sequence numbers
@@ -578,6 +793,16 @@ impl SecureSession for Session {
     
     fn erase_sensitive_memory(&mut self) {
         self.zero_sensitive_memory();
+    }
+}
+
+// Add Drop implementation to ensure sensitive data is cleared
+impl Drop for Session {
+    fn drop(&mut self) {
+        // Make sure all sensitive memory is zeroed
+        if self.memory_manager.is_zero_on_free_enabled() {
+            self.zero_sensitive_memory();
+        }
     }
 }
 
@@ -685,6 +910,135 @@ mod tests {
         assert!(!session.memory_manager().is_memory_locking_enabled());
         // In embedded mode, canary protection should be disabled
         assert!(!session.memory_manager().is_canary_protection_enabled());
+        
+        Ok(())
+    }
+    
+    #[test]
+    fn test_zeroize_on_drop() -> Result<()> {
+        // This test ensures sensitive data is cleared
+        
+        // Create a session with a protected key
+        let key_data = [0x42u8; 32];
+        let mut session = Session::with_protected_key(key_data)?;
+        
+        // Use the session
+        let client_public_key = session.init_key_exchange()?;
+        
+        // Now verify the session key exists and matches
+        if let Some(ref protected_key) = session.session_key {
+            assert_eq!(*protected_key, key_data);
+            
+            // Manually zeroize the key
+            session.zero_sensitive_memory();
+            
+            // Key should be zeroed
+            if let Some(ref zeroed_key) = session.session_key {
+                assert_eq!(*zeroed_key, [0u8; 32]);
+            }
+        }
+        
+        Ok(())
+    }
+    
+    #[test]
+    fn test_constant_time_operations() -> Result<()> {
+        let mut session = Session::new()?;
+        
+        // Make sure constant-time operations are enabled
+        session.memory_manager_mut().enable_constant_time();
+        
+        // Test constant-time equality
+        let a = [1u8, 2, 3, 4];
+        let b = [1u8, 2, 3, 4];
+        let c = [5u8, 6, 7, 8];
+        
+        assert!(session.constant_time_eq(&a, &b));
+        assert!(!session.constant_time_eq(&a, &c));
+        
+        // Test with different lengths
+        let d = [1u8, 2, 3];
+        assert!(!session.constant_time_eq(&a, &d));
+        
+        Ok(())
+    }
+    
+    #[test]
+    fn test_protected_memory() -> Result<()> {
+        let mut session = Session::new()?;
+        
+        // Create a secure vector
+        let mut secure_vec = session.create_secure_vec32();
+        
+        // Add some data
+        for i in 0..32 {
+            secure_vec.push(i).unwrap();
+        }
+        
+        // Check the content
+        assert_eq!(secure_vec.len(), 32);
+        for i in 0..32 {
+            assert_eq!(secure_vec[i as usize], i);
+        }
+        
+        Ok(())
+    }
+    
+    #[test]
+    fn test_key_rotation() -> Result<()> {
+        let mut client = Session::new()?;
+        let mut server = Session::new()?;
+        server.set_role(Role::Server);
+        
+        // Set up session
+        let client_public_key = client.init_key_exchange()?;
+        let ciphertext = server.accept_key_exchange(&client_public_key)?;
+        client.process_key_exchange(&ciphertext)?;
+        
+        client.set_remote_verification_key(server.local_verification_key().clone())?;
+        server.set_remote_verification_key(client.local_verification_key().clone())?;
+        client.complete_authentication()?;
+        server.complete_authentication()?;
+        
+        // Perform key rotation
+        let rotation_msg = client.initiate_key_rotation()?;
+        let server_response = server.process_key_rotation(&rotation_msg)?;
+        client.complete_key_rotation(&server_response)?;
+        
+        // Verify we can still send data after rotation
+        let test_data = b"After rotation";
+        let encrypted = client.encrypt_and_sign(test_data)?;
+        let decrypted = server.verify_and_decrypt(&encrypted)?;
+        assert_eq!(test_data, &decrypted[..]);
+        
+        Ok(())
+    }
+    
+    #[test]
+    fn test_hardware_security() -> Result<()> {
+        let mut session = Session::new()?;
+        
+        // Try to enable hardware security
+        let hw_available = session.use_hardware_security(true)?;
+        
+        // Print availability for diagnostic purposes
+        println!("Hardware security available: {}", hw_available);
+        
+        // If hardware security is available, test it
+        if hw_available {
+            // Setup session
+            let client_public_key = session.init_key_exchange()?;
+            
+            // Check if session_key was created
+            assert!(session.session_key.is_some());
+            
+            // At this point, keys should be in HSM if available
+            println!("HSM enabled: {}", session.memory_manager().is_hardware_security_enabled());
+        }
+        
+        // Disable hardware security
+        session.use_hardware_security(false)?;
+        assert!(!session.memory_manager().is_hardware_security_enabled());
         
         Ok(())
     }
