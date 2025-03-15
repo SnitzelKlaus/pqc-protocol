@@ -6,6 +6,8 @@ authors = ["snitzelklaus@gmail.com"]
 description = "Post-Quantum Cryptography Streaming Protocol"
 
 [dependencies]
+subtle = "2.6.1"
+
 # PQC algorithms - using actual implementations
 pqcrypto-kyber = "0.8.1"        # CRYSTALS-Kyber implementation
 pqcrypto-dilithium = "0.5.0"    # CRYSTALS-Dilithium implementation

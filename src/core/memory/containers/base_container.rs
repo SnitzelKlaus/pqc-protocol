@@ -11,13 +11,13 @@ use std::alloc::{self, Layout};
 use std::mem;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use rand::{Rng, thread_rng};
+use rand::{Rng, rng};
 use subtle::ConstantTimeEq;
 
-use crate::core::memory::traits::zeroize::{Zeroize, secure_zero_memory};
+use crate::core::memory::traits::zeroize::Zeroize;
 use crate::core::memory::traits::protection::MemoryProtection;
 use crate::core::memory::error::{Error, Result};
-use crate::core::memory::platform::get_platform_impl;
+use crate::core::memory::platforms::get_platform_impl;
 
 /// A secure memory container for sensitive data.
 ///
@@ -63,7 +63,7 @@ impl<T> SecureContainer<T> {
             .expect("Invalid layout for secure memory");
         
         // Generate random canary value
-        let canary = thread_rng().gen::<u64>();
+        let canary = rng().random::<u64>();
         
         let locked = AtomicBool::new(false);
         let canary_enabled = AtomicBool::new(cfg!(feature = "memory-canary"));
@@ -82,14 +82,14 @@ impl<T> SecureContainer<T> {
             ptr::write(ptr, value);
             
             // Generate random padding to prevent fingerprinting
-            let mut rng = thread_rng();
+            let mut rng = rng();
             // Front padding
             for i in 0..padding_size {
-                ptr::write_volatile(allocation.add(i), rng.gen::<u8>());
+                ptr::write_volatile(allocation.add(i), rng.random::<u8>());
             }
             // Back padding
             for i in 0..padding_size {
-                ptr::write_volatile(allocation.add(padding_size + size + i), rng.gen::<u8>());
+                ptr::write_volatile(allocation.add(padding_size + size + i), rng.random::<u8>());
             }
             
             // Write canary values at the end of each padding area
@@ -129,7 +129,7 @@ impl<T> SecureContainer<T> {
     /// Get the actual allocation base pointer (internal use only)
     unsafe fn allocation_base(&self) -> *mut u8 {
         // The allocation base is padding_size bytes before the inner pointer
-        (self.inner as *mut u8).sub(self.padding_size)
+        unsafe { (self.inner as *mut u8).sub(self.padding_size) }
     }
     
     /// Convert to a byte slice (for clearing/zeroizing)
@@ -165,13 +165,13 @@ impl<T> SecureContainer<T> {
             return;
         }
         
-        let mut rng = thread_rng();
+        let mut rng = rng();
         unsafe {
             let ptr = self.inner as *mut u8;
             
             // Fill with random bytes
             for i in 0..size {
-                ptr::write_volatile(ptr.add(i), rng.gen::<u8>());
+                ptr::write_volatile(ptr.add(i), rng.random::<u8>());
             }
         }
     }
@@ -182,8 +182,10 @@ impl<T> SecureContainer<T> {
             return None;
         }
         
-        let front_canary_ptr = self.allocation_base().add(self.padding_size - 8) as *const u64;
-        Some(ptr::read_volatile(front_canary_ptr))
+        unsafe {
+            let front_canary_ptr = self.allocation_base().add(self.padding_size - 8) as *const u64;
+            Some(ptr::read_volatile(front_canary_ptr))
+        }
     }
     
     /// Get the back canary value if enabled
@@ -193,8 +195,11 @@ impl<T> SecureContainer<T> {
         }
         
         let size = mem::size_of::<T>();
+        
+        unsafe {
         let back_canary_ptr = (self.inner as *mut u8).add(size) as *const u64;
         Some(ptr::read_volatile(back_canary_ptr))
+        }
     }
     
     /// Enable canary protection
