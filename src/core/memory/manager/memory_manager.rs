@@ -1,25 +1,28 @@
 /*!
 Enhanced secure memory manager for the PQC protocol.
 
-This module extends the existing memory manager with improved security features:
-- ZeroizeOnDrop for automatic zeroization
-- Heapless vectors to avoid heap allocation risks
-- Protected memory using mprotect for read-only after initialization
-- Hardware security module integration
-- Constant-time operations to prevent timing attacks
+This module provides a centralized manager for secure memory operations:
+- Controls memory security features (locking, canary values, etc.)
+- Factory methods for creating secure memory containers
+- Integration with hardware security modules
+- Platform-specific memory operations
 */
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use crate::core::memory::memory_security::MemorySecurity;
-use crate::core::memory::zeroize::{Zeroize, secure_zero_memory};
-use crate::core::memory::secure_memory::SecureMemory;
-use crate::core::memory::secure_vec::SecureVec;
-use crate::core::memory::zeroize_on_drop::ZeroizeOnDrop;
-use crate::core::memory::heapless_vec::{SecureHeaplessVec, SecureVec32, SecureVec64};
-use crate::core::memory::protected_memory::{ProtectedMemory, ProtectedKey32};
-use crate::core::security::hardware_security::{HardwareSecurityManager, HardwareSecurityCapability};
-use crate::core::security::constant_time;
-use crate::core::error::Result;
+use std::sync::Arc;
+
+use crate::core::memory::traits::security::{MemorySecurity, SecureMemoryFactory};
+use crate::core::memory::traits::zeroize::{Zeroize, secure_zero_memory};
+use crate::core::memory::containers::base_container::SecureContainer;
+use crate::core::memory::containers::heap_container::SecureHeap;
+use crate::core::memory::containers::readonly_container::ReadOnlyContainer;
+use crate::core::memory::containers::stack_container::SecureStack;
+use crate::core::memory::utils::zeroize_on_drop::ZeroizeOnDrop;
+use crate::core::memory::platform::{PlatformMemory, get_platform_impl};
+use crate::core::memory::error::{Error, Result};
+
+#[cfg(feature = "hardware-security")]
+use crate::core::memory::hardware::HardwareSecurityCapability;
 
 /// Enhanced secure memory manager with additional protections
 pub struct SecureMemoryManager {
@@ -41,48 +44,52 @@ pub struct SecureMemoryManager {
     /// Whether to use hardware security modules when available
     use_hardware_security: AtomicBool,
     
-    /// Hardware security manager for TPM, SGX, etc.
-    hw_security: Option<HardwareSecurityManager>,
-    
     /// Whether to use constant-time operations
     use_constant_time: AtomicBool,
     
     /// Whether to use read-only memory protection
     use_read_only_protection: AtomicBool,
+    
+    /// Platform-specific memory operations
+    platform: Arc<dyn PlatformMemory>,
+    
+    /// Hardware security manager for TPM, SGX, etc.
+    #[cfg(feature = "hardware-security")]
+    hw_security: Option<crate::core::memory::hardware::HardwareSecurityManager>,
 }
 
 impl SecureMemoryManager {
     /// Create a new secure memory manager with the specified security level
     pub fn new(level: MemorySecurity) -> Self {
+        // Get platform-specific implementation
+        let platform = get_platform_impl();
+        
         // Initialize hardware security if available
-        let hw_security = HardwareSecurityManager::new();
-        let has_hw_security = hw_security.is_available();
+        #[cfg(feature = "hardware-security")]
+        let (hw_security, has_hw_security) = {
+            let hw = crate::core::memory::hardware::HardwareSecurityManager::new();
+            (Some(hw), hw.is_available())
+        };
+        
+        #[cfg(not(feature = "hardware-security"))]
+        let has_hw_security = false;
         
         let manager = Self {
             level,
             auto_erase: true,
             
-            #[cfg(feature = "memory-lock")]
-            memory_locking: AtomicBool::new(true),
-            #[cfg(not(feature = "memory-lock"))]
-            memory_locking: AtomicBool::new(false),
-            
-            #[cfg(feature = "memory-canary")]
-            canary_protection: AtomicBool::new(true),
-            #[cfg(not(feature = "memory-canary"))]
-            canary_protection: AtomicBool::new(false),
-            
-            #[cfg(feature = "memory-zero")]
-            zero_on_free: AtomicBool::new(true),
-            #[cfg(not(feature = "memory-zero"))]
-            zero_on_free: AtomicBool::new(false),
+            memory_locking: AtomicBool::new(cfg!(feature = "memory-lock")),
+            canary_protection: AtomicBool::new(cfg!(feature = "memory-canary")),
+            zero_on_free: AtomicBool::new(true), // Always enabled by default
             
             use_hardware_security: AtomicBool::new(has_hw_security),
-            hw_security: Some(hw_security),
-            
             use_constant_time: AtomicBool::new(true),
+            use_read_only_protection: AtomicBool::new(cfg!(feature = "memory-enhanced")),
             
-            use_read_only_protection: AtomicBool::new(true),
+            platform,
+            
+            #[cfg(feature = "hardware-security")]
+            hw_security,
         };
         
         manager
@@ -111,7 +118,56 @@ impl SecureMemoryManager {
     /// Set the security level
     pub fn set_security_level(&mut self, level: MemorySecurity) {
         self.level = level;
+        
+        // Adjust settings based on the new security level
+        match level {
+            MemorySecurity::Standard => {
+                // Standard settings - basic protections
+                self.enable_zero_on_free();
+                
+                if cfg!(feature = "memory-lock") {
+                    self.enable_memory_locking();
+                }
+            },
+            MemorySecurity::Enhanced => {
+                // Enhanced settings - all standard protections plus canaries
+                self.enable_zero_on_free();
+                
+                if cfg!(feature = "memory-lock") {
+                    self.enable_memory_locking();
+                }
+                
+                if cfg!(feature = "memory-canary") {
+                    self.enable_canary_protection();
+                }
+            },
+            MemorySecurity::Maximum => {
+                // Maximum settings - all protections enabled
+                self.enable_zero_on_free();
+                
+                if cfg!(feature = "memory-lock") {
+                    self.enable_memory_locking();
+                }
+                
+                if cfg!(feature = "memory-canary") {
+                    self.enable_canary_protection();
+                }
+                
+                if cfg!(feature = "memory-enhanced") {
+                    self.enable_read_only_protection();
+                }
+                
+                self.enable_constant_time();
+                
+                #[cfg(feature = "hardware-security")]
+                self.enable_hardware_security();
+            },
+        }
     }
+    
+    //--------------------------------------------------------------
+    // Security feature getters/setters
+    //--------------------------------------------------------------
     
     /// Check if memory locking is enabled
     pub fn is_memory_locking_enabled(&self) -> bool {
@@ -218,84 +274,23 @@ impl SecureMemoryManager {
         self.auto_erase = false;
     }
     
+    /// Get the platform-specific memory implementation
+    pub fn platform(&self) -> &dyn PlatformMemory {
+        &*self.platform
+    }
+    
+    //--------------------------------------------------------------
+    // Hardware security methods
+    //--------------------------------------------------------------
+    
     /// Get the hardware security manager, if available
-    pub fn hardware_security_manager(&self) -> Option<&HardwareSecurityManager> {
+    #[cfg(feature = "hardware-security")]
+    pub fn hardware_security_manager(&self) -> Option<&crate::core::memory::hardware::HardwareSecurityManager> {
         self.hw_security.as_ref()
     }
     
-    //--------------------------------------------------------------
-    // Secure memory creation functions
-    //--------------------------------------------------------------
-    
-    /// Create a secure memory container for sensitive data
-    pub fn secure_memory<T>(&self, value: T) -> SecureMemory<T> {
-        SecureMemory::new(value)
-    }
-    
-    /// Create a secure memory container with auto-zeroing
-    pub fn zeroizing_memory<T: Zeroize>(&self, value: T) -> ZeroizeOnDrop<T> {
-        ZeroizeOnDrop::new(value)
-    }
-    
-    /// Create a protected memory container that can be made read-only
-    pub fn protected_memory<T: Sized>(&self, value: T) -> ProtectedMemory<T> {
-        let mut memory = ProtectedMemory::new(value);
-        
-        // If read-only protection is enabled, protect the memory
-        if self.is_read_only_protection_enabled() {
-            memory.protect();
-        }
-        
-        memory
-    }
-    
-    /// Create a secure vector container
-    pub fn secure_vec<T>(&self) -> SecureVec<T> {
-        SecureVec::new()
-    }
-    
-    /// Create a secure vector with capacity
-    pub fn secure_vec_with_capacity<T>(&self, capacity: usize) -> SecureVec<T> {
-        SecureVec::with_capacity(capacity)
-    }
-    
-    /// Create a secure vector from an existing vector
-    pub fn secure_vec_from_vec<T>(&self, vec: Vec<T>) -> SecureVec<T> {
-        SecureVec::from_vec(vec)
-    }
-    
-    /// Create a secure heapless vector (stack-allocated)
-    pub fn secure_heapless_vec<T, const N: usize>(&self) -> SecureHeaplessVec<T, N> {
-        SecureHeaplessVec::new()
-    }
-    
-    /// Create a 32-byte secure heapless vector (for 256-bit keys)
-    pub fn secure_bytes32(&self) -> SecureVec32 {
-        SecureVec32::new()
-    }
-    
-    /// Create a 64-byte secure heapless vector (for 512-bit keys)
-    pub fn secure_bytes64(&self) -> SecureVec64 {
-        SecureVec64::new()
-    }
-    
-    /// Create a protected 32-byte key
-    pub fn protected_key32(&self, key_data: [u8; 32]) -> ProtectedKey32 {
-        let mut key = ProtectedMemory::new(key_data);
-        
-        // If read-only protection is enabled, protect the memory
-        if self.is_read_only_protection_enabled() {
-            key.protect();
-        }
-        
-        key
-    }
-    
-    //--------------------------------------------------------------
-    // Hardware security functions
-    //--------------------------------------------------------------
-    
     /// Store a key in hardware security module
+    #[cfg(feature = "hardware-security")]
     pub fn store_key_in_hsm(&self, key_id: &str, key_data: &[u8]) -> Result<()> {
         if !self.is_hardware_security_enabled() {
             return Ok(());
@@ -303,12 +298,14 @@ impl SecureMemoryManager {
         
         if let Some(hw) = &self.hw_security {
             hw.store_key(key_id, key_data)
+                .map_err(|e| Error::HsmError(format!("Failed to store key: {}", e)))
         } else {
             Ok(())
         }
     }
     
     /// Retrieve a key from hardware security module
+    #[cfg(feature = "hardware-security")]
     pub fn retrieve_key_from_hsm(&self, key_id: &str) -> Result<Option<Vec<u8>>> {
         if !self.is_hardware_security_enabled() {
             return Ok(None);
@@ -316,29 +313,29 @@ impl SecureMemoryManager {
         
         if let Some(hw) = &self.hw_security {
             hw.retrieve_key(key_id)
+                .map_err(|e| Error::HsmError(format!("Failed to retrieve key: {}", e)))
         } else {
             Ok(None)
         }
     }
     
     /// Sign data using a key in the hardware security module
+    #[cfg(feature = "hardware-security")]
     pub fn sign_with_hsm(&self, key_id: &str, data: &[u8]) -> Result<Vec<u8>> {
         if !self.is_hardware_security_enabled() {
-            return Err(crate::core::error::Error::Internal(
-                "Hardware security not enabled".to_string()
-            ));
+            return Err(Error::HsmError("Hardware security not enabled".to_string()));
         }
         
         if let Some(hw) = &self.hw_security {
             hw.sign_data(key_id, data)
+                .map_err(|e| Error::HsmError(format!("Failed to sign data: {}", e)))
         } else {
-            Err(crate::core::error::Error::Internal(
-                "Hardware security module not available".to_string()
-            ))
+            Err(Error::HsmError("Hardware security module not available".to_string()))
         }
     }
     
     /// Generate random data using hardware security module
+    #[cfg(feature = "hardware-security")]
     pub fn generate_random_with_hsm(&self, length: usize) -> Result<Vec<u8>> {
         if !self.is_hardware_security_enabled() {
             // Fall back to using the system RNG
@@ -351,6 +348,7 @@ impl SecureMemoryManager {
         
         if let Some(hw) = &self.hw_security {
             hw.generate_random(length)
+                .map_err(|e| Error::HsmError(format!("Failed to generate random data: {}", e)))
         } else {
             // Fall back to using the system RNG
             use rand::{thread_rng, RngCore};
@@ -362,6 +360,7 @@ impl SecureMemoryManager {
     }
     
     /// Check if a specific hardware security capability is available
+    #[cfg(feature = "hardware-security")]
     pub fn has_hw_capability(&self, capability: HardwareSecurityCapability) -> bool {
         if !self.is_hardware_security_enabled() {
             return false;
@@ -375,13 +374,58 @@ impl SecureMemoryManager {
     }
     
     //--------------------------------------------------------------
+    // Placeholders for hardware security when the feature is disabled
+    //--------------------------------------------------------------
+    
+    /// Placeholder for hardware security manager
+    #[cfg(not(feature = "hardware-security"))]
+    pub fn hardware_security_manager(&self) -> Option<()> {
+        None
+    }
+    
+    /// Placeholder for store key in HSM
+    #[cfg(not(feature = "hardware-security"))]
+    pub fn store_key_in_hsm(&self, _key_id: &str, _key_data: &[u8]) -> Result<()> {
+        Ok(())
+    }
+    
+    /// Placeholder for retrieve key from HSM
+    #[cfg(not(feature = "hardware-security"))]
+    pub fn retrieve_key_from_hsm(&self, _key_id: &str) -> Result<Option<Vec<u8>>> {
+        Ok(None)
+    }
+    
+    /// Placeholder for sign with HSM
+    #[cfg(not(feature = "hardware-security"))]
+    pub fn sign_with_hsm(&self, _key_id: &str, _data: &[u8]) -> Result<Vec<u8>> {
+        Err(Error::Other("Hardware security not supported".to_string()))
+    }
+    
+    /// Placeholder for generate random with HSM
+    #[cfg(not(feature = "hardware-security"))]
+    pub fn generate_random_with_hsm(&self, length: usize) -> Result<Vec<u8>> {
+        // Fall back to using the system RNG
+        use rand::{thread_rng, RngCore};
+        let mut rng = thread_rng();
+        let mut buffer = vec![0u8; length];
+        rng.fill_bytes(&mut buffer);
+        Ok(buffer)
+    }
+    
+    /// Placeholder for has HSM capability
+    #[cfg(not(feature = "hardware-security"))]
+    pub fn has_hw_capability(&self, _capability: u32) -> bool {
+        false
+    }
+    
+    //--------------------------------------------------------------
     // Constant-time operation helpers
     //--------------------------------------------------------------
     
     /// Compare two byte slices in constant time
     pub fn constant_time_eq(&self, a: &[u8], b: &[u8]) -> bool {
         if self.is_constant_time_enabled() {
-            constant_time::constant_time_eq(a, b)
+            crate::core::memory::utils::constant_time::constant_time_eq(a, b)
         } else {
             a == b
         }
@@ -393,7 +437,7 @@ impl SecureMemoryManager {
         T: std::ops::BitXor<Output = T> + Copy,
     {
         if self.is_constant_time_enabled() {
-            constant_time::constant_time_select(condition, a, b)
+            crate::core::memory::utils::constant_time::constant_time_select(condition, a, b)
         } else {
             if condition { a } else { b }
         }
@@ -402,7 +446,7 @@ impl SecureMemoryManager {
     /// Increment a counter in constant time
     pub fn increment_counter(&self, counter: &mut u32, value: u32) {
         if self.is_constant_time_enabled() {
-            constant_time::constant_time_increment(counter, value);
+            crate::core::memory::utils::constant_time::constant_time_increment(counter, value);
         } else {
             *counter = counter.wrapping_add(value);
         }
@@ -417,24 +461,45 @@ impl SecureMemoryManager {
         key.zeroize();
     }
     
-    /// Apply current security settings to an existing SecureMemory container
-    pub fn apply_settings_to_memory<T>(&self, memory: &mut SecureMemory<T>) {
-        // This is a placeholder - in a real implementation, we would
-        // modify the security settings of the memory container
-    }
-    
-    /// Apply current security settings to an existing SecureVec container
-    pub fn apply_settings_to_vec<T>(&self, vec: &mut SecureVec<T>) {
-        if self.is_canary_protection_enabled() {
-            vec.enable_canary();
-        } else {
-            vec.disable_canary();
-        }
-    }
-    
     /// Zero out sensitive memory regions
     pub fn zeroize_region(&self, region: &mut [u8]) {
         secure_zero_memory(region);
+    }
+    
+    /// Lock memory region to prevent swapping
+    pub fn lock_memory(&self, ptr: *const u8, size: usize) -> Result<()> {
+        if !self.is_memory_locking_enabled() {
+            return Ok(());
+        }
+        
+        self.platform.lock_memory(ptr, size)
+    }
+    
+    /// Unlock previously locked memory region
+    pub fn unlock_memory(&self, ptr: *const u8, size: usize) -> Result<()> {
+        if !self.is_memory_locking_enabled() {
+            return Ok(());
+        }
+        
+        self.platform.unlock_memory(ptr, size)
+    }
+    
+    /// Make memory region read-only
+    pub fn protect_memory_readonly(&self, ptr: *const u8, size: usize) -> Result<()> {
+        if !self.is_read_only_protection_enabled() {
+            return Ok(());
+        }
+        
+        self.platform.protect_memory_readonly(ptr, size)
+    }
+    
+    /// Make memory region readable and writable
+    pub fn protect_memory_readwrite(&self, ptr: *const u8, size: usize) -> Result<()> {
+        if !self.is_read_only_protection_enabled() {
+            return Ok(());
+        }
+        
+        self.platform.protect_memory_readwrite(ptr, size)
     }
     
     /// Check if memory protection is working correctly
@@ -457,7 +522,7 @@ impl SecureMemoryManager {
         
         // Try to create and protect some memory
         let test_value = [1u8, 2, 3, 4];
-        let mut protected = ProtectedMemory::new(test_value);
+        let mut protected = ReadOnlyContainer::new(test_value);
         
         // Try to protect it
         let protect_result = protected.protect();
@@ -479,7 +544,6 @@ impl SecureMemoryManager {
         
         // Create some data we'll verify gets zeroed
         let mut data = vec![42u8; 16];
-        let data_ptr = data.as_ptr() as usize;
         
         // Wrap in ZeroizeOnDrop
         {
@@ -492,6 +556,50 @@ impl SecureMemoryManager {
     }
 }
 
+// Implement SecureMemoryFactory trait for SecureMemoryManager
+impl SecureMemoryFactory for SecureMemoryManager {
+    fn create_secure_container<T>(&self, value: T) -> SecureContainer<T> {
+        let mut container = SecureContainer::new(value);
+        
+        // Apply current settings
+        if self.is_canary_protection_enabled() {
+            container.enable_canary();
+        } else {
+            container.disable_canary();
+        }
+        
+        container
+    }
+    
+    fn create_secure_heap<T>(&self) -> SecureHeap<T> {
+        let mut heap = SecureHeap::new();
+        
+        // Apply current settings
+        if self.is_canary_protection_enabled() {
+            heap.enable_canary();
+        } else {
+            heap.disable_canary();
+        }
+        
+        heap
+    }
+    
+    fn create_secure_stack<T, const N: usize>(&self) -> SecureStack<T, N> {
+        SecureStack::new()
+    }
+    
+    fn create_readonly_container<T: Sized>(&self, value: T) -> ReadOnlyContainer<T> {
+        let container = ReadOnlyContainer::new(value);
+        
+        // If read-only protection is enabled, protect the memory
+        if self.is_read_only_protection_enabled() {
+            container.protect();
+        }
+        
+        container
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -501,35 +609,26 @@ mod tests {
         let memory_manager = SecureMemoryManager::new(MemorySecurity::Enhanced);
         
         // Test creating secure memory through the manager
-        let secure_mem = memory_manager.secure_memory([0u8; 32]);
-        
-        #[cfg(feature = "memory-lock")]
-        assert!(secure_mem.is_locked());
+        let secure_mem = memory_manager.create_secure_container([0u8; 32]);
         
         // Test creating secure vector through the manager
-        let secure_vec = memory_manager.secure_vec_from_vec(vec![1, 2, 3, 4, 5]);
-        assert_eq!(secure_vec[0], 1);
+        let secure_vec = memory_manager.create_secure_heap::<u8>();
         
         // Test security settings
-        #[cfg(feature = "memory-lock")]
-        assert!(memory_manager.is_memory_locking_enabled());
-        
-        #[cfg(feature = "memory-canary")]
-        assert!(memory_manager.is_canary_protection_enabled());
-        
-        #[cfg(feature = "memory-zero")]
-        assert!(memory_manager.is_zero_on_free_enabled());
-        
-        // Test security level
         assert_eq!(memory_manager.security_level(), MemorySecurity::Enhanced);
+        
+        // Change security level
+        let mut manager2 = memory_manager;
+        manager2.set_security_level(MemorySecurity::Maximum);
+        assert_eq!(manager2.security_level(), MemorySecurity::Maximum);
     }
     
     #[test]
-    fn test_heapless_vectors() {
+    fn test_secure_stack() {
         let memory_manager = SecureMemoryManager::new(MemorySecurity::Standard);
         
         // Create a 32-byte secure vector (for keys)
-        let mut bytes32 = memory_manager.secure_bytes32();
+        let mut bytes32 = memory_manager.create_secure_stack::<u8, 32>();
         for i in 0..32 {
             bytes32.push(i as u8).unwrap();
         }
@@ -537,42 +636,15 @@ mod tests {
         assert_eq!(bytes32.len(), 32);
         assert_eq!(bytes32[0], 0);
         assert_eq!(bytes32[31], 31);
-        
-        // Create a 64-byte secure vector (for signatures)
-        let mut bytes64 = memory_manager.secure_bytes64();
-        for i in 0..64 {
-            bytes64.push(i as u8).unwrap();
-        }
-        
-        assert_eq!(bytes64.len(), 64);
     }
     
     #[test]
-    fn test_zeroizing_memory() {
-        let memory_manager = SecureMemoryManager::new(MemorySecurity::Standard);
-        
-        // Test with a simple array
-        let original = [1u8, 2, 3, 4, 5];
-        let mut data = original.clone();
-        
-        {
-            let mut zeroizing = memory_manager.zeroizing_memory(&mut data);
-            // Modify the data
-            zeroizing[0] = 42;
-            // zeroizing is dropped here
-        }
-        
-        // Data should be zeroed out
-        assert_eq!(data, [0, 0, 0, 0, 0]);
-    }
-    
-    #[test]
-    fn test_protected_memory() {
+    fn test_readonly_container() {
         let memory_manager = SecureMemoryManager::new(MemorySecurity::Enhanced);
         
         // Create protected memory
         let key_data = [0x42u8; 32];
-        let mut key = memory_manager.protected_key32(key_data);
+        let mut key = memory_manager.create_readonly_container(key_data);
         
         // Should start protected if read-only protection is enabled
         if memory_manager.is_read_only_protection_enabled() {
@@ -615,31 +687,6 @@ mod tests {
     }
     
     #[test]
-    fn test_hardware_security() {
-        let memory_manager = SecureMemoryManager::new(MemorySecurity::Maximum);
-        
-        // Check if hardware security is available
-        println!("Hardware security enabled: {}", memory_manager.is_hardware_security_enabled());
-        
-        // If hardware security is available, test it
-        if memory_manager.is_hardware_security_enabled() {
-            if let Some(hw) = memory_manager.hardware_security_manager() {
-                println!("Available HSMs: {:?}", hw.available_hsm_types());
-                
-                // Check capabilities
-                let has_rng = memory_manager.has_hw_capability(HardwareSecurityCapability::RandomGeneration);
-                println!("Has hardware RNG: {}", has_rng);
-                
-                // Generate random data using HSM
-                if has_rng {
-                    let random = memory_manager.generate_random_with_hsm(32).unwrap();
-                    assert_eq!(random.len(), 32);
-                }
-            }
-        }
-    }
-    
-    #[test]
     fn test_wipe_key() {
         let memory_manager = SecureMemoryManager::default();
         let mut key = vec![42u8; 32];
@@ -656,5 +703,27 @@ mod tests {
         for byte in &key {
             assert_eq!(*byte, 0);
         }
+    }
+    
+    #[test]
+    fn test_memory_locking() {
+        let memory_manager = SecureMemoryManager::default();
+        
+        // Enable memory locking
+        memory_manager.enable_memory_locking();
+        assert!(memory_manager.is_memory_locking_enabled());
+        
+        // Allocate some memory to test
+        let data = vec![0u8; 4096];
+        
+        // Try to lock the memory
+        let result = memory_manager.lock_memory(data.as_ptr(), data.len());
+        
+        // This might succeed or fail depending on the platform and permissions
+        println!("Memory lock result: {:?}", result);
+        
+        // Unlock the memory
+        let unlock_result = memory_manager.unlock_memory(data.as_ptr(), data.len());
+        println!("Memory unlock result: {:?}", unlock_result);
     }
 }

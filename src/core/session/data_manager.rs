@@ -26,7 +26,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 // Add new imports for enhanced security
 use crate::core::memory::zeroize_on_drop::ZeroizeOnDrop;
-use crate::core::memory::protected_memory::ProtectedMemory;
+use crate::core::memory::protection::ProtectedMemory;
 use crate::core::memory::heapless_vec::SecureHeaplessVec;
 use subtle::ConstantTimeEq;
 

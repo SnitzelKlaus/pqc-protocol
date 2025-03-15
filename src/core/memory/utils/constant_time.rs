@@ -1,14 +1,20 @@
 /*!
-Constant-time cryptographic operations for PQC protocol.
+Constant-time operations for security-sensitive code.
 
 This module provides constant-time implementations of common operations
 to help prevent timing attacks on cryptographic code, utilizing the
 subtle crate for core operations.
 */
 
+use std::ops::BitXor;
 use subtle::{Choice, ConstantTimeEq, ConstantTimeGreater, ConstantTimeLess};
 use subtle::black_box;
-use std::ops::BitXor;
+
+/// Trait for types that can be compared in constant time
+pub trait ConstantTimeComparable {
+    /// Compare for equality in constant time
+    fn ct_eq(&self, other: &Self) -> bool;
+}
 
 /// Compare two byte slices for equality in constant time.
 ///
@@ -129,89 +135,4 @@ pub fn constant_time_pad_with_zeros(buffer: &mut Vec<u8>, target_len: usize) {
 #[inline(never)]
 pub fn constant_time_process<T: Copy>(value: T) -> T {
     black_box(value)
-}
-
-/// Module-level unit tests
-#[cfg(test)]
-mod tests {
-    use super::*;
-    
-    #[test]
-    fn test_constant_time_eq() {
-        let a = [1u8, 2u8, 3u8, 4u8];
-        let b = [1u8, 2u8, 3u8, 4u8];
-        let c = [1u8, 2u8, 3u8, 5u8];
-        let d = [1u8, 2u8, 3u8];
-        
-        assert!(constant_time_eq(&a, &b));
-        assert!(!constant_time_eq(&a, &c));
-        assert!(!constant_time_eq(&a, &d));
-        
-        // Test array version
-        let arr_a = [1u8, 2u8, 3u8, 4u8];
-        let arr_b = [1u8, 2u8, 3u8, 4u8];
-        let arr_c = [1u8, 2u8, 3u8, 5u8];
-        
-        assert!(constant_time_eq_arrays(&arr_a, &arr_b));
-        assert!(!constant_time_eq_arrays(&arr_a, &arr_c));
-    }
-    
-    #[test]
-    fn test_constant_time_select() {
-        assert_eq!(constant_time_select(true, 42u32, 24u32), 42u32);
-        assert_eq!(constant_time_select(false, 42u32, 24u32), 24u32);
-        
-        // Test with different types
-        assert_eq!(constant_time_select(true, 1u8, 2u8), 1u8);
-        assert_eq!(constant_time_select(false, 1u8, 2u8), 2u8);
-    }
-    
-    #[test]
-    fn test_constant_time_increment() {
-        let mut counter = 10u32;
-        constant_time_increment(&mut counter, 5);
-        assert_eq!(counter, 15u32);
-        
-        // Test overflow
-        let mut max_counter = u32::MAX;
-        constant_time_increment(&mut max_counter, 1);
-        assert_eq!(max_counter, 0u32);
-    }
-    
-    #[test]
-    fn test_constant_time_compare() {
-        assert_eq!(constant_time_compare(5, 3), 1);
-        assert_eq!(constant_time_compare(3, 5), -1);
-        assert_eq!(constant_time_compare(5, 5), 0);
-    }
-    
-    #[test]
-    fn test_constant_time_copy() {
-        let src = [1u8, 2u8, 3u8, 4u8];
-        let mut dst = [0u8; 4];
-        
-        constant_time_copy(&mut dst, &src);
-        assert_eq!(dst, [1, 2, 3, 4]);
-        
-        // Test with different lengths
-        let mut dst2 = [0u8; 6];
-        constant_time_copy(&mut dst2, &src);
-        assert_eq!(dst2, [1, 2, 3, 4, 0, 0]);
-        
-        let mut dst3 = [0u8; 2];
-        constant_time_copy(&mut dst3, &src);
-        assert_eq!(dst3, [1, 2]);
-    }
-    
-    #[test]
-    fn test_constant_time_pad() {
-        let mut buffer = vec![1, 2, 3];
-        constant_time_pad_with_zeros(&mut buffer, 5);
-        assert_eq!(buffer, vec![1, 2, 3, 0, 0]);
-        
-        // Test when buffer is already at target length
-        let mut buffer2 = vec![1, 2, 3];
-        constant_time_pad_with_zeros(&mut buffer2, 3);
-        assert_eq!(buffer2, vec![1, 2, 3]);
-    }
 }

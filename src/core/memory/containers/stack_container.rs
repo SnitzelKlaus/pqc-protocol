@@ -1,27 +1,31 @@
 /*!
-Heapless vector implementation for secure memory in the PQC protocol.
+Stack-allocated secure container for the PQC protocol.
 
 This module provides a wrapper around heapless::Vec to ensure sensitive
 cryptographic material never gets allocated on the heap, which is more
 difficult to reliably clean up and can be subject to memory dumps.
 */
 
-use crate::core::memory::zeroize::Zeroize;
-use crate::core::memory::zeroize_on_drop::ZeroizeOnDrop;
-use heapless::Vec as HeaplessVec;
 use std::ops::{Deref, DerefMut};
 use std::fmt;
+
+use heapless::Vec as HeaplessVec;
+
+use crate::core::memory::traits::zeroize::Zeroize;
+use crate::core::memory::utils::zeroize_on_drop::ZeroizeOnDrop;
+use crate::core::memory::traits::protection::MemoryProtection;
+use crate::core::memory::error::{Error, Result};
 
 /// A fixed-capacity vector that stores elements on the stack.
 /// 
 /// This implementation wraps heapless::Vec to provide stack-only storage
 /// for sensitive cryptographic material, with automatic zeroization on drop.
-pub struct SecureHeaplessVec<T, const N: usize> {
+pub struct SecureStack<T, const N: usize> {
     /// The inner vector stored on the stack
     inner: ZeroizeOnDrop<HeaplessVec<T, N>>,
 }
 
-impl<T, const N: usize> SecureHeaplessVec<T, N> {
+impl<T, const N: usize> SecureStack<T, N> {
     /// Create a new empty secure vector with fixed capacity N.
     pub fn new() -> Self {
         Self {
@@ -68,9 +72,56 @@ impl<T, const N: usize> SecureHeaplessVec<T, N> {
     pub fn clear(&mut self) {
         self.inner.clear();
     }
+    
+    /// Consumes this container and returns the inner vector
+    pub fn into_inner(self) -> HeaplessVec<T, N> {
+        self.inner.into_inner()
+    }
 }
 
-impl<T, const N: usize> Deref for SecureHeaplessVec<T, N> {
+impl<T, const N: usize> MemoryProtection for SecureStack<T, N> {
+    fn lock_memory(&mut self) -> Result<()> {
+        // Stack memory doesn't need locking
+        Ok(())
+    }
+    
+    fn unlock_memory(&mut self) -> Result<()> {
+        // Stack memory doesn't need unlocking
+        Ok(())
+    }
+    
+    fn is_memory_locked(&self) -> bool {
+        // Stack memory is inherently "locked"
+        true
+    }
+    
+    fn make_read_only(&mut self) -> Result<()> {
+        // Not supported for stack memory
+        Err(Error::ProtectionFailed("Cannot make stack memory read-only".to_string()))
+    }
+    
+    fn make_writable(&mut self) -> Result<()> {
+        // Stack memory is already writable
+        Ok(())
+    }
+    
+    fn is_read_only(&self) -> bool {
+        false
+    }
+    
+    fn check_integrity(&self) -> Result<()> {
+        // No integrity checks for stack memory
+        Ok(())
+    }
+    
+    fn clear(&mut self) -> Result<()> {
+        // Clear the vector
+        self.inner.clear();
+        Ok(())
+    }
+}
+
+impl<T, const N: usize> Deref for SecureStack<T, N> {
     type Target = HeaplessVec<T, N>;
     
     fn deref(&self) -> &Self::Target {
@@ -78,28 +129,28 @@ impl<T, const N: usize> Deref for SecureHeaplessVec<T, N> {
     }
 }
 
-impl<T, const N: usize> DerefMut for SecureHeaplessVec<T, N> {
+impl<T, const N: usize> DerefMut for SecureStack<T, N> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
     }
 }
 
-impl<T, const N: usize> Default for SecureHeaplessVec<T, N> {
+impl<T, const N: usize> Default for SecureStack<T, N> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T: fmt::Debug, const N: usize> fmt::Debug for SecureHeaplessVec<T, N> {
+impl<T: fmt::Debug, const N: usize> fmt::Debug for SecureStack<T, N> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SecureHeaplessVec")
+        f.debug_struct("SecureStack")
             .field("inner", &self.inner)
             .field("capacity", &N)
             .finish()
     }
 }
 
-impl<T: Clone, const N: usize> Clone for SecureHeaplessVec<T, N> {
+impl<T: Clone, const N: usize> Clone for SecureStack<T, N> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
@@ -107,7 +158,7 @@ impl<T: Clone, const N: usize> Clone for SecureHeaplessVec<T, N> {
     }
 }
 
-impl<T: Zeroize, const N: usize> Zeroize for SecureHeaplessVec<T, N>
+impl<T: Zeroize, const N: usize> Zeroize for SecureStack<T, N>
 where
     HeaplessVec<T, N>: Zeroize,
 {
@@ -128,19 +179,19 @@ impl<const N: usize> Zeroize for HeaplessVec<u8, N> {
 }
 
 // Common size aliases for convenience
-pub type SecureVec32 = SecureHeaplessVec<u8, 32>;    // For 256-bit keys
-pub type SecureVec64 = SecureHeaplessVec<u8, 64>;    // For 512-bit keys
-pub type SecureVec1K = SecureHeaplessVec<u8, 1024>;  // For 1KB blocks
-pub type SecureVec4K = SecureHeaplessVec<u8, 4096>;  // For 4KB blocks
+pub type SecureStack32 = SecureStack<u8, 32>;    // For 256-bit keys
+pub type SecureStack64 = SecureStack<u8, 64>;    // For 512-bit keys
+pub type SecureStack1K = SecureStack<u8, 1024>;  // For 1KB blocks
+pub type SecureStack4K = SecureStack<u8, 4096>;  // For 4KB blocks
 
 #[cfg(test)]
 mod tests {
     use super::*;
     
     #[test]
-    fn test_secure_heapless_vec() {
+    fn test_secure_stack() {
         // Create a new secure vector with 32-byte capacity
-        let mut vec: SecureHeaplessVec<u8, 32> = SecureHeaplessVec::new();
+        let mut vec: SecureStack<u8, 32> = SecureStack::new();
         
         // Push some data
         for i in 0..16 {
@@ -173,36 +224,58 @@ mod tests {
         // This test verifies that data is zeroed when dropped
         let data = [1u8, 2, 3, 4, 5];
         
-        // We need to maintain a reference to check if zeroize worked
+        // Create a heapless vector
         let mut raw_vec = HeaplessVec::<u8, 32>::new();
         raw_vec.extend_from_slice(&data).unwrap();
         
         // Create a wrapper that will zeroize on drop
+        let heap_vec = raw_vec.clone();
         {
-            let _secure_vec = SecureHeaplessVec::from_vec(raw_vec.clone());
+            let _secure_vec = SecureStack::from_vec(heap_vec);
             // _secure_vec is dropped here
         }
         
-        // At this point, the wrapper has been dropped, but we still have raw_vec
-        // In a normal Rust program, we couldn't check this because the drop would
-        // consume the value, but for testing purposes we've cloned the original
+        // Create a new secure vector and check zeroize directly
+        let mut secure_vec = SecureStack::from_vec(raw_vec);
+        secure_vec.zeroize();
         
-        // Note: This test is mostly for illustration - in actual code, the security
-        // guarantee comes from ZeroizeOnDrop which is tested separately
+        // Check that all bytes are now zero
+        for i in 0..data.len() {
+            assert_eq!(secure_vec[i], 0);
+        }
     }
     
     #[test]
     fn test_alias_types() {
-        let mut vec32: SecureVec32 = SecureVec32::new();
+        let mut vec32: SecureStack32 = SecureStack32::new();
         assert_eq!(vec32.capacity(), 32);
         
-        let mut vec64: SecureVec64 = SecureVec64::new();
+        let mut vec64: SecureStack64 = SecureStack64::new();
         assert_eq!(vec64.capacity(), 64);
         
-        let mut vec1k: SecureVec1K = SecureVec1K::new();
+        let mut vec1k: SecureStack1K = SecureStack1K::new();
         assert_eq!(vec1k.capacity(), 1024);
         
-        let mut vec4k: SecureVec4K = SecureVec4K::new();
+        let mut vec4k: SecureStack4K = SecureStack4K::new();
         assert_eq!(vec4k.capacity(), 4096);
+    }
+    
+    #[test]
+    fn test_memory_protection() {
+        let mut secure = SecureStack::<u8, 32>::new();
+        
+        // These operations should be no-ops on stack memory
+        assert!(secure.lock_memory().is_ok());
+        assert!(secure.unlock_memory().is_ok());
+        assert!(secure.is_memory_locked());
+        
+        // Make read-only should fail for stack memory
+        assert!(secure.make_read_only().is_err());
+        
+        // Make writable should be a no-op
+        assert!(secure.make_writable().is_ok());
+        
+        // Integrity check should pass
+        assert!(secure.check_integrity().is_ok());
     }
 }

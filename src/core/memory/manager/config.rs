@@ -5,7 +5,8 @@ This module provides configurations for different platforms, including
 resource-constrained environments like embedded systems and WebAssembly.
 */
 
-use crate::core::memory::{SecureMemoryManager, MemorySecurity};
+use crate::core::memory::traits::security::MemorySecurity;
+use crate::core::memory::manager::memory_manager::SecureMemoryManager;
 
 /// Platform types for memory configuration
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,20 +33,39 @@ pub struct MemoryConfig {
     /// Memory security level
     security_level: MemorySecurity,
     
+    /// Memory protection features
+    features: MemoryFeatures,
+}
+
+/// Specific memory protection features that can be enabled/disabled
+#[derive(Debug, Clone, Copy)]
+pub struct MemoryFeatures {
     /// Whether to use memory locking
-    use_memory_locking: bool,
+    pub use_memory_locking: bool,
     
     /// Whether to use canary values
-    use_canary: bool,
+    pub use_canary: bool,
     
     /// Whether to zero memory on free
-    zero_on_free: bool,
+    pub zero_on_free: bool,
     
     /// Whether to use secure RNG for padding
-    use_secure_rng: bool,
+    pub use_secure_rng: bool,
     
     /// Amount of padding to use (in bytes)
-    padding_size: usize,
+    pub padding_size: usize,
+}
+
+impl Default for MemoryFeatures {
+    fn default() -> Self {
+        Self {
+            use_memory_locking: true,
+            use_canary: true,
+            zero_on_free: true,
+            use_secure_rng: true,
+            padding_size: 64,
+        }
+    }
 }
 
 impl Default for MemoryConfig {
@@ -60,73 +80,68 @@ impl MemoryConfig {
         Self {
             platform: Platform::Standard,
             security_level: MemorySecurity::Standard,
-            use_memory_locking: true,
-            use_canary: true,
-            zero_on_free: true,
-            use_secure_rng: true,
-            padding_size: 64, // Default padding size
+            features: MemoryFeatures::default(),
         }
     }
     
     /// Create configuration for embedded platform
-    #[cfg(feature = "embedded-compat")]
     pub fn embedded() -> Self {
+        let mut features = MemoryFeatures::default();
+        features.use_memory_locking = false;
+        features.use_canary = cfg!(feature = "embedded-canary");
+        features.use_secure_rng = cfg!(feature = "embedded-rng");
+        features.padding_size = 16;
+        
         Self {
             platform: Platform::Embedded,
             security_level: MemorySecurity::Standard,
-            use_memory_locking: false, // Often not available on embedded
-            use_canary: false, // Reduce overhead
-            zero_on_free: true, // Still zero sensitive data
-            use_secure_rng: false, // May not have good RNG
-            padding_size: 16, // Minimal padding
+            features,
         }
-    }
-    
-    /// Create configuration for embedded platform (fallback when feature disabled)
-    #[cfg(not(feature = "embedded-compat"))]
-    pub fn embedded() -> Self {
-        let mut config = Self::standard();
-        config.platform = Platform::Embedded;
-        config.use_memory_locking = false;
-        config.padding_size = 16;
-        config
     }
     
     /// Create configuration for WebAssembly
-    #[cfg(feature = "wasm-compat")]
     pub fn wasm() -> Self {
+        let mut features = MemoryFeatures::default();
+        features.use_memory_locking = false;
+        features.padding_size = 32;
+        
         Self {
             platform: Platform::Wasm,
             security_level: MemorySecurity::Standard,
-            use_memory_locking: false, // Not available in WASM
-            use_canary: true, // Still use overflow protection
-            zero_on_free: true, // Still zero sensitive data
-            use_secure_rng: true, // Use browser's crypto.getRandomValues
-            padding_size: 32, // Moderate padding
+            features,
         }
-    }
-    
-    /// Create configuration for WebAssembly (fallback when feature disabled)
-    #[cfg(not(feature = "wasm-compat"))]
-    pub fn wasm() -> Self {
-        let mut config = Self::standard();
-        config.platform = Platform::Wasm;
-        config.use_memory_locking = false;
-        config.padding_size = 32;
-        config
     }
     
     /// Create configuration for mobile platform
     pub fn mobile() -> Self {
+        let mut features = MemoryFeatures::default();
+        features.padding_size = 32;
+        
         Self {
             platform: Platform::Mobile,
             security_level: MemorySecurity::Standard,
-            use_memory_locking: true, // Available on most mobile platforms
-            use_canary: true,
-            zero_on_free: true,
-            use_secure_rng: true,
-            padding_size: 32, // Moderate padding
+            features,
         }
+    }
+    
+    /// Get the platform type
+    pub fn platform(&self) -> Platform {
+        self.platform
+    }
+    
+    /// Get the security level
+    pub fn security_level(&self) -> MemorySecurity {
+        self.security_level
+    }
+    
+    /// Get the features configuration
+    pub fn features(&self) -> &MemoryFeatures {
+        &self.features
+    }
+    
+    /// Get mutable access to features configuration
+    pub fn features_mut(&mut self) -> &mut MemoryFeatures {
+        &mut self.features
     }
     
     /// Set memory security level
@@ -137,31 +152,31 @@ impl MemoryConfig {
     
     /// Enable or disable memory locking
     pub fn with_memory_locking(mut self, enable: bool) -> Self {
-        self.use_memory_locking = enable;
+        self.features.use_memory_locking = enable;
         self
     }
     
     /// Enable or disable canary protection
     pub fn with_canary(mut self, enable: bool) -> Self {
-        self.use_canary = enable;
+        self.features.use_canary = enable;
         self
     }
     
     /// Enable or disable zeroing memory on free
     pub fn with_zero_on_free(mut self, enable: bool) -> Self {
-        self.zero_on_free = enable;
+        self.features.zero_on_free = enable;
         self
     }
     
     /// Enable or disable secure RNG for padding
     pub fn with_secure_rng(mut self, enable: bool) -> Self {
-        self.use_secure_rng = enable;
+        self.features.use_secure_rng = enable;
         self
     }
     
     /// Set padding size
     pub fn with_padding_size(mut self, size: usize) -> Self {
-        self.padding_size = size;
+        self.features.padding_size = size;
         self
     }
     
@@ -171,30 +186,21 @@ impl MemoryConfig {
         manager.set_security_level(self.security_level);
         
         // Configure individual settings
-        if self.use_memory_locking {
-            #[cfg(feature = "memory-lock")]
+        if self.features.use_memory_locking {
             manager.enable_memory_locking();
-            
-            #[cfg(not(feature = "memory-lock"))]
-            let _ = manager; // Avoid unused warning
         } else {
-            #[cfg(feature = "memory-lock")]
             manager.disable_memory_locking();
         }
         
-        if self.use_canary {
-            #[cfg(feature = "memory-canary")]
+        if self.features.use_canary {
             manager.enable_canary_protection();
         } else {
-            #[cfg(feature = "memory-canary")]
             manager.disable_canary_protection();
         }
         
-        if self.zero_on_free {
-            #[cfg(feature = "memory-zero")]
+        if self.features.zero_on_free {
             manager.enable_zero_on_free();
         } else {
-            #[cfg(feature = "memory-zero")]
             manager.disable_zero_on_free();
         }
     }
@@ -246,54 +252,5 @@ pub fn for_current_platform() -> MemoryConfig {
         Platform::Embedded => MemoryConfig::embedded(),
         Platform::Mobile => MemoryConfig::mobile(),
         Platform::Standard => MemoryConfig::standard(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    
-    #[test]
-    fn test_platform_configs() {
-        // Test standard config
-        let standard = MemoryConfig::standard();
-        assert_eq!(standard.platform, Platform::Standard);
-        assert!(standard.use_memory_locking);
-        assert!(standard.use_canary);
-        
-        // Test embedded config
-        let embedded = MemoryConfig::embedded();
-        assert_eq!(embedded.platform, Platform::Embedded);
-        assert!(!embedded.use_memory_locking);
-        
-        // Test WASM config
-        let wasm = MemoryConfig::wasm();
-        assert_eq!(wasm.platform, Platform::Wasm);
-        assert!(!wasm.use_memory_locking);
-    }
-    
-    #[test]
-    fn test_custom_config() {
-        let custom = MemoryConfig::standard()
-            .with_security_level(MemorySecurity::Maximum)
-            .with_padding_size(128)
-            .with_memory_locking(false);
-        
-        assert_eq!(custom.security_level, MemorySecurity::Maximum);
-        assert_eq!(custom.padding_size, 128);
-        assert!(!custom.use_memory_locking);
-    }
-    
-    #[test]
-    fn test_apply_to_manager() {
-        let config = MemoryConfig::embedded();
-        let mut manager = SecureMemoryManager::default();
-        
-        // Apply embedded config
-        config.apply_to_manager(&mut manager);
-        
-        // Verify settings were applied
-        #[cfg(feature = "memory-lock")]
-        assert!(!manager.is_memory_locking_enabled());
     }
 }

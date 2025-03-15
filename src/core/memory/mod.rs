@@ -5,60 +5,52 @@ This module provides secure memory implementations for handling
 sensitive cryptographic material and platform-specific memory configurations.
 */
 
-// Secure memory implementation
-pub mod secure_memory;
-pub mod secure_vec;
-pub mod zeroize;
+// Re-export main modules
+pub mod api;
+pub mod error;
 
-// New modules for enhanced security
-pub mod zeroize_on_drop;
-pub mod heapless_vec;
-pub mod protected_memory;
+// Core traits
+pub mod traits;
 
-// Memory security levels and traits
-pub mod memory_security;
+// Container implementations
+pub mod containers;
 
-// Memory management
-pub mod secure_memory_manager;
+// Utility functions
+pub mod utils;
 
-// Enhanced memory protection (feature-gated)
+// Memory manager
+pub mod manager;
+
+// Hardware security (feature-gated)
+#[cfg(feature = "hardware-security")]
+pub mod hardware;
+
+// Re-export the main components for easy access
+pub use error::{Error, Result};
+pub use traits::zeroize::{Zeroize, secure_zero_memory};
+pub use traits::protection::MemoryProtection;
+pub use traits::security::{MemorySecurity, SecureSession, SecureMemoryFactory};
+
+pub use containers::base_container::SecureContainer;
+pub use containers::readonly_container::ReadOnlyContainer;
+pub use containers::heap_container::SecureHeap;
+pub use containers::stack_container::{SecureStack, SecureStack32, SecureStack64};
+
+pub use utils::zeroize_on_drop::ZeroizeOnDrop;
+
+pub use manager::memory_manager::SecureMemoryManager;
+pub use manager::config::{Platform, MemoryConfig, for_current_platform};
+
+// Optional re-exports based on features
 #[cfg(feature = "memory-enhanced")]
-pub mod enhanced_memory;
+pub use containers::enhanced_container::EnhancedContainer;
 
-// WebAssembly specific memory manager
-#[cfg(all(target_arch = "wasm32", feature = "wasm-compat"))]
-pub mod wasm_memory;
+#[cfg(target_arch = "wasm32")]
+pub use platform::wasm::WasmMemoryManager;
 
-// Platform-specific memory configuration
-pub mod config;
-
-// Re-export the main components
-pub use secure_memory::SecureMemory;
-pub use secure_vec::SecureVec;
-pub use zeroize::{Zeroize, secure_zero_memory};
-
-// Re-export the new components
-pub use zeroize_on_drop::ZeroizeOnDrop;
-pub use heapless_vec::{SecureHeaplessVec, SecureVec32, SecureVec64};
-pub use protected_memory::{ProtectedMemory, ProtectedKey32};
-
-// Re-export memory manager components
-pub use secure_memory_manager::SecureMemoryManager;
-pub use memory_security::MemorySecurity;
-pub use memory_security::SecureSession;
-
-// Re-export enhanced memory components if feature is enabled
-#[cfg(feature = "memory-enhanced")]
-pub use enhanced_memory::EnhancedSecureMemory;
-
-// Re-export WASM memory components for WebAssembly targets
-#[cfg(all(target_arch = "wasm32", feature = "wasm-compat"))]
-pub use wasm_memory::WasmMemoryManager;
-
-// Re-export memory configuration components
-pub use config::{
-    Platform,
-    MemoryConfig,
-    auto_detect_platform,
-    for_current_platform,
-};
+/// Type aliases for backward compatibility
+pub type SecureMemory<T> = SecureContainer<T>;
+pub type SecureVec<T> = SecureHeap<T>;
+pub type SecureHeaplessVec<T, const N: usize> = SecureStack<T, N>;
+pub type ProtectedMemory<T> = ReadOnlyContainer<T>;
+pub type ProtectedKey32 = ReadOnlyContainer<[u8; 32]>;

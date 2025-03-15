@@ -23,7 +23,7 @@ use pqcrypto_traits::kem::SharedSecret;
 
 // New imports for enhanced security
 use crate::core::memory::zeroize_on_drop::ZeroizeOnDrop;
-use crate::core::memory::protected_memory::ProtectedMemory;
+use crate::core::memory::protection::ProtectedMemory;
 use crate::core::memory::heapless_vec::{SecureHeaplessVec, SecureVec32};
 use crate::core::security::constant_time;
 use crate::core::security::hardware_security::{HardwareSecurityManager, HardwareSecurityCapability};
