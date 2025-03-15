@@ -5,12 +5,12 @@ This module provides functions for creating and checking canary values
 to detect buffer overflows in secure memory containers.
 */
 
-use rand::{Rng, thread_rng};
+use rand::{Rng, rng};
 use crate::core::memory::error::{Error, Result};
 
 /// Create a new random canary value
 pub fn create_canary() -> u64 {
-    thread_rng().gen::<u64>()
+    rng().random::<u64>()
 }
 
 /// Check a pair of canary values for equality

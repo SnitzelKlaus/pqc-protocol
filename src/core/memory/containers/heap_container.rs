@@ -9,7 +9,7 @@ memory zeroing.
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use rand::{Rng, thread_rng};
+use rand::{Rng, rng};
 
 use crate::core::memory::traits::zeroize::{Zeroize, secure_zero_memory};
 use crate::core::memory::traits::protection::MemoryProtection;
@@ -38,7 +38,7 @@ pub struct SecureHeap<T> {
 impl<T> SecureHeap<T> {
     /// Create a new secure container
     pub fn new() -> Self {
-        let canary = thread_rng().gen::<u64>();
+        let canary = rng().random::<u64>();
         Self {
             inner: Vec::new(),
             locked: AtomicBool::new(false),
@@ -50,7 +50,7 @@ impl<T> SecureHeap<T> {
     
     /// Create a secure container with capacity
     pub fn with_capacity(capacity: usize) -> Self {
-        let canary = thread_rng().gen::<u64>();
+        let canary = rng().random::<u64>();
         Self {
             inner: Vec::with_capacity(capacity),
             locked: AtomicBool::new(false),
@@ -62,7 +62,7 @@ impl<T> SecureHeap<T> {
     
     /// Create a secure container from existing vector
     pub fn from_vec(vec: Vec<T>) -> Self {
-        let canary = thread_rng().gen::<u64>();
+        let canary = rng().random::<u64>();
         let mut secure = Self {
             inner: vec,
             locked: AtomicBool::new(false),
@@ -90,7 +90,7 @@ impl<T> SecureHeap<T> {
     /// Enable canary protection
     pub fn enable_canary(&mut self) {
         if !self.using_canary.load(Ordering::Relaxed) {
-            let canary = thread_rng().gen::<u64>();
+            let canary = rng().random::<u64>();
             self.front_canary = canary;
             self.back_canary = canary;
             self.using_canary.store(true, Ordering::Relaxed);

@@ -9,8 +9,8 @@ use crate::core::memory::manager::config::{MemoryConfig, for_current_platform};
 use crate::core::memory::manager::memory_manager::SecureMemoryManager;
 use crate::core::memory::containers::base_container::SecureContainer;
 use crate::core::memory::containers::heap_container::SecureHeap;
-use crate::core::memory::containers::readonly_container::{ReadOnlyContainer, ProtectedKey32};
-use crate::core::memory::containers::stack_container::{SecureStack, SecureStack32, SecureStack64};
+use crate::core::memory::containers::readonly_container::ProtectedKey32;
+use crate::core::memory::containers::stack_container::SecureStack;
 use crate::core::memory::traits::zeroize::Zeroize;
 use crate::core::memory::error::Result;
 
