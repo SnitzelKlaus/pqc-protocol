@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::core::memory::traits::zeroize::Zeroize;
 use crate::core::memory::utils::zeroize_on_drop::ZeroizeOnDrop;
-use crate::core::memory::platform::get_platform_impl;
+use crate::core::memory::platforms::get_platform_impl;
 use crate::core::memory::traits::protection::MemoryProtection;
 use crate::core::memory::error::{Error, Result};
 

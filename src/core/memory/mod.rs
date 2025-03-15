@@ -21,6 +21,9 @@ pub mod utils;
 // Memory manager
 pub mod manager;
 
+// Platform compatibility
+pub mod platforms;
+
 // Hardware security (feature-gated)
 #[cfg(feature = "hardware-security")]
 pub mod hardware;

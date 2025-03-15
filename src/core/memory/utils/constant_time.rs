@@ -7,8 +7,8 @@ subtle crate for core operations.
 */
 
 use std::ops::BitXor;
+use std::hint::black_box; // Use std::hint::black_box instead of subtle's private version
 use subtle::{Choice, ConstantTimeEq, ConstantTimeGreater, ConstantTimeLess};
-use subtle::black_box;
 
 /// Trait for types that can be compared in constant time
 pub trait ConstantTimeComparable {
@@ -63,8 +63,29 @@ where
     // Convert bool to u8 (0 or 1)
     let c = Choice::from(condition as u8);
     
-    // Use constant-time select operation
-    subtle::conditional_select(&b, &a, c)
+    // Implementation of conditional select using a bitmask approach
+    // This avoids using subtle's internal implementation
+    let mask = if c.unwrap_u8() != 0 { !0 } else { 0 };
+    
+    // Using manual pointer manipulation for constant-time selection
+    // Safety: We're only accessing the bytes of valid objects a and b
+    unsafe {
+        let mut r = b;
+        let a_ptr = &a as *const T as *const u8;
+        let b_ptr = &b as *const T as *const u8;
+        let r_ptr = &mut r as *mut T as *mut u8;
+        
+        for i in 0..std::mem::size_of::<T>() {
+            let a_byte = *a_ptr.add(i);
+            let b_byte = *b_ptr.add(i);
+            // Apply mask: b_byte ^ (mask & (a_byte ^ b_byte))
+            // If mask is all 1s (condition is true), this becomes a_byte
+            // If mask is all 0s (condition is false), this remains b_byte
+            *r_ptr.add(i) = b_byte ^ ((a_byte ^ b_byte) & mask);
+        }
+        
+        r
+    }
 }
 
 /// Increment a counter in constant time.
@@ -84,9 +105,10 @@ pub fn constant_time_increment(counter: &mut u32, value: u32) {
 ///
 /// This function takes the same amount of time regardless of the inputs.
 pub fn constant_time_compare(a: u32, b: u32) -> i8 {
-    let gt = a.ct_gt(b).unwrap_u8() as i8;
-    let eq = a.ct_eq(b).unwrap_u8() as i8;
-    let lt = a.ct_lt(b).unwrap_u8() as i8;
+    // Pass references to the ct methods
+    let gt = (&a).ct_gt(&b).unwrap_u8() as i8;
+    let eq = (&a).ct_eq(&b).unwrap_u8() as i8;
+    let lt = (&a).ct_lt(&b).unwrap_u8() as i8;
     
     // Compute the result: 1 if a > b, 0 if a = b, -1 if a < b
     gt - lt

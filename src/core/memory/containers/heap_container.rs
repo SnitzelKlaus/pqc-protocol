@@ -14,7 +14,7 @@ use rand::{Rng, rng};
 use crate::core::memory::traits::zeroize::{Zeroize, secure_zero_memory};
 use crate::core::memory::traits::protection::MemoryProtection;
 use crate::core::memory::error::{Error, Result};
-use crate::core::memory::platform::get_platform_impl;
+use crate::core::memory::platforms::get_platform_impl;
 
 /// A secure heap-allocated container for dynamic collections.
 ///

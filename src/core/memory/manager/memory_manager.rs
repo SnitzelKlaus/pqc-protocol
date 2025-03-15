@@ -18,7 +18,7 @@ use crate::core::memory::containers::heap_container::SecureHeap;
 use crate::core::memory::containers::readonly_container::ReadOnlyContainer;
 use crate::core::memory::containers::stack_container::SecureStack;
 use crate::core::memory::utils::zeroize_on_drop::ZeroizeOnDrop;
-use crate::core::memory::platform::{PlatformMemory, get_platform_impl};
+use crate::core::memory::platforms::{PlatformMemory, get_platform_impl};
 use crate::core::memory::error::{Error, Result};
 
 #[cfg(feature = "hardware-security")]
@@ -405,8 +405,8 @@ impl SecureMemoryManager {
     #[cfg(not(feature = "hardware-security"))]
     pub fn generate_random_with_hsm(&self, length: usize) -> Result<Vec<u8>> {
         // Fall back to using the system RNG
-        use rand::{thread_rng, RngCore};
-        let mut rng = thread_rng();
+        use rand::{rng, RngCore};
+        let mut rng = rng();
         let mut buffer = vec![0u8; length];
         rng.fill_bytes(&mut buffer);
         Ok(buffer)

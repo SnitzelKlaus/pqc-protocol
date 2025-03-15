@@ -226,7 +226,8 @@ pub fn auto_detect_platform() -> Platform {
     #[cfg(any(
         target_arch = "arm",
         target_arch = "mips",
-        target_arch = "riscv",
+        target_arch = "riscv32",
+        target_arch = "riscv64",
         all(target_arch = "aarch64", target_pointer_width = "32")
     ))]
     {

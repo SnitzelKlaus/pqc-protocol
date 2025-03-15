@@ -4,7 +4,6 @@ Core traits for memory security.
 This module provides the core traits that define memory security capabilities.
 */
 
-pub mod zeroize;
 pub mod protection;
 pub mod security;
 
