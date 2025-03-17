@@ -5,7 +5,7 @@ This module provides a unified interface for platform-specific memory operations
 such as locking memory to prevent swapping and setting memory protection levels.
 */
 
-use crate::core::memory::error::{Error, Result};
+use crate::core::memory::error::Result;
 
 // Platform-specific implementations
 #[cfg(unix)]
@@ -46,7 +46,7 @@ pub trait PlatformMemory: Send + Sync {
     fn aligned_size(&self, ptr: *const u8, size: usize) -> usize {
         let page_size = self.page_size();
         let addr = ptr as usize;
-        let aligned_addr = (addr & !(page_size - 1));
+        let aligned_addr = addr & !(page_size - 1);
         let offset = addr - aligned_addr;
         let aligned_size = (offset + size + page_size - 1) & !(page_size - 1);
         aligned_size
