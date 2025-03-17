@@ -11,9 +11,8 @@ use std::ptr;
 use std::fmt;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, Ordering};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
-use crate::core::memory::utils::zeroize_on_drop::ZeroizeOnDrop;
 use crate::core::memory::platforms::get_platform_impl;
 use crate::core::memory::traits::protection::MemoryProtection;
 use crate::core::memory::error::{Error, Result};
@@ -23,7 +22,7 @@ pub struct ReadOnlyContainer<T: Sized> {
     /// Pointer to the protected data
     data: *mut T,
     /// Buffer containing the data and padding to page boundaries
-    buffer: ZeroizeOnDrop<Vec<u8>>,
+    buffer: Zeroizing<Vec<u8>>,
     /// The protection state
     protected: AtomicBool,
     /// Size of a page on this system
@@ -59,7 +58,7 @@ impl<T: Sized> ReadOnlyContainer<T> {
         
         Self {
             data: data_ptr,
-            buffer: ZeroizeOnDrop::new(buffer),
+            buffer: Zeroizing::new(buffer),
             protected: AtomicBool::new(false),
             page_size,
             _phantom: PhantomData,
@@ -232,7 +231,7 @@ impl<T: Sized> Drop for ReadOnlyContainer<T> {
             ptr::drop_in_place(self.data);
         }
         
-        // Buffer will be zeroed by ZeroizeOnDrop
+        // Buffer will be zeroed by Zeroizing
     }
 }
 

@@ -11,13 +11,13 @@ This module provides a centralized manager for secure memory operations:
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use zeroize::Zeroize;
+use zeroize::Zeroizing;
 
 use crate::core::memory::traits::security::{MemorySecurity, SecureMemoryFactory};
 use crate::core::memory::containers::base_container::SecureContainer;
 use crate::core::memory::containers::heap_container::SecureHeap;
 use crate::core::memory::containers::readonly_container::ReadOnlyContainer;
 use crate::core::memory::containers::stack_container::SecureStack;
-use crate::core::memory::utils::zeroize_on_drop::ZeroizeOnDrop;
 use crate::core::memory::platforms::{PlatformMemory, get_platform_impl};
 use crate::core::memory::error::{Error, Result};
 
@@ -545,9 +545,9 @@ impl SecureMemoryManager {
         // Create some data we'll verify gets zeroed
         let mut data = vec![42u8; 16];
         
-        // Wrap in ZeroizeOnDrop
+        // Wrap in Zeroizing
         {
-            let _wrapped = ZeroizeOnDrop::new(&mut data);
+            let _wrapped = Zeroizing::new(&mut data);
             // _wrapped goes out of scope here
         }
         

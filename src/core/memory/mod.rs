@@ -39,7 +39,8 @@ pub use containers::readonly_container::ReadOnlyContainer;
 pub use containers::heap_container::SecureHeap;
 pub use containers::stack_container::{SecureStack, SecureStack32, SecureStack64};
 
-pub use utils::zeroize_on_drop::ZeroizeOnDrop;
+pub use utils::constant_time::constant_time_eq;
+pub use zeroize::Zeroizing;
 
 pub use manager::memory_manager::SecureMemoryManager;
 pub use manager::config::{Platform, MemoryConfig, for_current_platform};

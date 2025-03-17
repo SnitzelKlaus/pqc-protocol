@@ -10,7 +10,7 @@ use std::ops::{Deref, DerefMut};
 use std::fmt;
 
 use heapless::Vec as HeaplessVec;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::core::memory::traits::protection::MemoryProtection;
 use crate::core::memory::error::{Error, Result};
@@ -70,21 +70,21 @@ impl<T, const N: usize> Zeroize for ZeroizableHeaplessVec<T, N> {
 /// for sensitive cryptographic material, with automatic zeroization on drop.
 pub struct SecureStack<T, const N: usize> {
     /// The inner vector stored on the stack
-    inner: ZeroizableHeaplessVec<T, N>,
+    inner: Zeroizing<ZeroizableHeaplessVec<T, N>>,
 }
 
 impl<T, const N: usize> SecureStack<T, N> {
     /// Create a new empty secure vector with fixed capacity N.
     pub fn new() -> Self {
         Self {
-            inner: ZeroizableHeaplessVec::new(HeaplessVec::new()),
+            inner: Zeroizing::new(ZeroizableHeaplessVec::new(HeaplessVec::new())),
         }
     }
     
     /// Create a secure vector from an existing heapless::Vec.
     pub fn from_vec(vec: HeaplessVec<T, N>) -> Self {
         Self {
-            inner: ZeroizableHeaplessVec::new(vec),
+            inner: Zeroizing::new(ZeroizableHeaplessVec::new(vec)),
         }
     }
     
@@ -124,7 +124,9 @@ impl<T, const N: usize> SecureStack<T, N> {
     
     /// Consumes this container and returns the inner vector
     pub fn into_inner(self) -> HeaplessVec<T, N> {
-        self.inner.inner
+        // Prevent zeroization by taking the inner value
+        let inner = Zeroizing::into_inner(self.inner);
+        inner.inner
     }
 }
 
@@ -207,7 +209,7 @@ impl<T: Clone, const N: usize> Clone for SecureStack<T, N> {
             let _ = new_vec.push(item.clone());
         }
         Self {
-            inner: ZeroizableHeaplessVec::new(new_vec),
+            inner: Zeroizing::new(ZeroizableHeaplessVec::new(new_vec)),
         }
     }
 }
