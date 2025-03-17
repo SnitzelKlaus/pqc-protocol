@@ -30,7 +30,7 @@ pub mod hardware;
 
 // Re-export the main components for easy access
 pub use error::{Error, Result};
-pub use traits::zeroize::{Zeroize, secure_zero_memory};
+pub use zeroize::Zeroize;
 pub use traits::protection::MemoryProtection;
 pub use traits::security::{MemorySecurity, SecureSession, SecureMemoryFactory};
 

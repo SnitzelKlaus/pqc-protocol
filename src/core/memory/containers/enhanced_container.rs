@@ -7,9 +7,9 @@ additional protections like read-only memory when not in use.
 
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicBool, Ordering};
+use zeroize::Zeroize;
 
 use crate::core::memory::containers::base_container::SecureContainer;
-use crate::core::memory::traits::zeroize::Zeroize;
 use crate::core::memory::traits::protection::MemoryProtection;
 use crate::core::memory::error::{Error, Result};
 

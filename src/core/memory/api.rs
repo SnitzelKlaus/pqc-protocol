@@ -11,7 +11,7 @@ use crate::core::memory::containers::base_container::SecureContainer;
 use crate::core::memory::containers::heap_container::SecureHeap;
 use crate::core::memory::containers::readonly_container::ProtectedKey32;
 use crate::core::memory::containers::stack_container::SecureStack;
-use crate::core::memory::traits::zeroize::Zeroize;
+use zeroize::Zeroize;
 use crate::core::memory::error::Result;
 
 /// Global memory manager instance (lazily initialized)

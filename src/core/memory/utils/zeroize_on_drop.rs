@@ -6,7 +6,7 @@ when it goes out of scope, ensuring that sensitive cryptographic material
 is not left in memory.
 */
 
-use crate::core::memory::traits::zeroize::Zeroize;
+use zeroize::Zeroize;
 use std::fmt;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -134,7 +134,6 @@ impl<T: Zeroize> AutoZeroize for T {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::memory::traits::zeroize::Zeroize;
 
     // Custom type for testing
     #[derive(Debug, PartialEq)]

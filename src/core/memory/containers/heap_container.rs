@@ -10,8 +10,8 @@ use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use rand::{Rng, rng};
+use zeroize::Zeroize;
 
-use crate::core::memory::traits::zeroize::{Zeroize, secure_zero_memory};
 use crate::core::memory::traits::protection::MemoryProtection;
 use crate::core::memory::error::{Error, Result};
 use crate::core::memory::platforms::get_platform_impl;
@@ -210,7 +210,7 @@ impl<T> MemoryProtection for SecureHeap<T> {
         if std::mem::size_of::<T>() > 0 && std::mem::needs_drop::<T>() {
             // Clear the memory with volatile writes if applicable
             if let Some(bytes) = self.as_mut_bytes() {
-                secure_zero_memory(bytes);
+                bytes.zeroize();
             }
         }
         

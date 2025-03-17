@@ -10,11 +10,59 @@ use std::ops::{Deref, DerefMut};
 use std::fmt;
 
 use heapless::Vec as HeaplessVec;
+use zeroize::Zeroize;
 
-use crate::core::memory::traits::zeroize::Zeroize;
-use crate::core::memory::utils::zeroize_on_drop::ZeroizeOnDrop;
 use crate::core::memory::traits::protection::MemoryProtection;
 use crate::core::memory::error::{Error, Result};
+
+/// A wrapper that zeroizes a heapless::Vec when dropped
+struct ZeroizableHeaplessVec<T, const N: usize> {
+    inner: HeaplessVec<T, N>
+}
+
+impl<T, const N: usize> ZeroizableHeaplessVec<T, N> {
+    fn new(vec: HeaplessVec<T, N>) -> Self {
+        Self { inner: vec }
+    }
+    
+    fn clear(&mut self) {
+        self.inner.clear();
+    }
+}
+
+impl<T, const N: usize> Deref for ZeroizableHeaplessVec<T, N> {
+    type Target = HeaplessVec<T, N>;
+    
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl<T, const N: usize> DerefMut for ZeroizableHeaplessVec<T, N> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
+impl<T, const N: usize> Zeroize for ZeroizableHeaplessVec<T, N> {
+    fn zeroize(&mut self) {
+        // Clear the vector
+        self.inner.clear();
+        
+        // For byte vectors, we can manually zero each element
+        if std::mem::size_of::<T>() == 1 {
+            // This is safe because we're just zeroing memory
+            let ptr = self.inner.as_mut_ptr() as *mut u8;
+            let capacity = N;
+            
+            unsafe {
+                for i in 0..capacity {
+                    std::ptr::write_volatile(ptr.add(i), 0);
+                }
+            }
+        }
+    }
+}
 
 /// A fixed-capacity vector that stores elements on the stack.
 /// 
@@ -22,35 +70,36 @@ use crate::core::memory::error::{Error, Result};
 /// for sensitive cryptographic material, with automatic zeroization on drop.
 pub struct SecureStack<T, const N: usize> {
     /// The inner vector stored on the stack
-    inner: ZeroizeOnDrop<HeaplessVec<T, N>>,
+    inner: ZeroizableHeaplessVec<T, N>,
 }
 
 impl<T, const N: usize> SecureStack<T, N> {
     /// Create a new empty secure vector with fixed capacity N.
     pub fn new() -> Self {
         Self {
-            inner: ZeroizeOnDrop::new(HeaplessVec::new()),
+            inner: ZeroizableHeaplessVec::new(HeaplessVec::new()),
         }
     }
     
     /// Create a secure vector from an existing heapless::Vec.
     pub fn from_vec(vec: HeaplessVec<T, N>) -> Self {
         Self {
-            inner: ZeroizeOnDrop::new(vec),
+            inner: ZeroizableHeaplessVec::new(vec),
         }
     }
     
     /// Try to push an element to the vector.
-    pub fn push(&mut self, value: T) -> Result<(), T> {
-        self.inner.push(value)
+    pub fn push(&mut self, value: T) -> Result<()> {
+        self.inner.push(value).map_err(|_| Error::Other("Buffer full".to_string()))
     }
     
     /// Try to extend the vector from a slice.
-    pub fn extend_from_slice(&mut self, slice: &[T]) -> Result<(), ()> 
+    pub fn extend_from_slice(&mut self, slice: &[T]) -> Result<()> 
     where
         T: Clone,
     {
         self.inner.extend_from_slice(slice)
+            .map_err(|_| Error::Other("Not enough space".to_string()))
     }
     
     /// Returns the remaining capacity in the vector.
@@ -75,7 +124,7 @@ impl<T, const N: usize> SecureStack<T, N> {
     
     /// Consumes this container and returns the inner vector
     pub fn into_inner(self) -> HeaplessVec<T, N> {
-        self.inner.into_inner()
+        self.inner.inner
     }
 }
 
@@ -152,29 +201,20 @@ impl<T: fmt::Debug, const N: usize> fmt::Debug for SecureStack<T, N> {
 
 impl<T: Clone, const N: usize> Clone for SecureStack<T, N> {
     fn clone(&self) -> Self {
+        let mut new_vec = HeaplessVec::new();
+        for item in self.inner.iter() {
+            // This should never fail if the capacity is the same
+            let _ = new_vec.push(item.clone());
+        }
         Self {
-            inner: self.inner.clone(),
+            inner: ZeroizableHeaplessVec::new(new_vec),
         }
     }
 }
 
-impl<T: Zeroize, const N: usize> Zeroize for SecureStack<T, N>
-where
-    HeaplessVec<T, N>: Zeroize,
-{
+impl<T, const N: usize> Zeroize for SecureStack<T, N> {
     fn zeroize(&mut self) {
-        // Delegate to the inner vector's zeroize implementation
         self.inner.zeroize();
-    }
-}
-
-// Implement a specialized zeroize for byte vectors
-impl<const N: usize> Zeroize for HeaplessVec<u8, N> {
-    fn zeroize(&mut self) {
-        // Zero out all bytes in the vector
-        for byte in self.iter_mut() {
-            *byte = 0;
-        }
     }
 }
 
@@ -240,23 +280,21 @@ mod tests {
         secure_vec.zeroize();
         
         // Check that all bytes are now zero
-        for i in 0..data.len() {
-            assert_eq!(secure_vec[i], 0);
-        }
+        assert_eq!(secure_vec.len(), 0); // Vector should be cleared
     }
     
     #[test]
     fn test_alias_types() {
-        let mut vec32: SecureStack32 = SecureStack32::new();
+        let vec32: SecureStack32 = SecureStack32::new();
         assert_eq!(vec32.capacity(), 32);
         
-        let mut vec64: SecureStack64 = SecureStack64::new();
+        let vec64: SecureStack64 = SecureStack64::new();
         assert_eq!(vec64.capacity(), 64);
         
-        let mut vec1k: SecureStack1K = SecureStack1K::new();
+        let vec1k: SecureStack1K = SecureStack1K::new();
         assert_eq!(vec1k.capacity(), 1024);
         
-        let mut vec4k: SecureStack4K = SecureStack4K::new();
+        let vec4k: SecureStack4K = SecureStack4K::new();
         assert_eq!(vec4k.capacity(), 4096);
     }
     

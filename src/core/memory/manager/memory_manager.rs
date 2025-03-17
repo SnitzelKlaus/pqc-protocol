@@ -10,9 +10,9 @@ This module provides a centralized manager for secure memory operations:
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use zeroize::Zeroize;
 
 use crate::core::memory::traits::security::{MemorySecurity, SecureMemoryFactory};
-use crate::core::memory::traits::zeroize::{Zeroize, secure_zero_memory};
 use crate::core::memory::containers::base_container::SecureContainer;
 use crate::core::memory::containers::heap_container::SecureHeap;
 use crate::core::memory::containers::readonly_container::ReadOnlyContainer;
@@ -463,7 +463,7 @@ impl SecureMemoryManager {
     
     /// Zero out sensitive memory regions
     pub fn zeroize_region(&self, region: &mut [u8]) {
-        secure_zero_memory(region);
+        region.zeroize();
     }
     
     /// Lock memory region to prevent swapping

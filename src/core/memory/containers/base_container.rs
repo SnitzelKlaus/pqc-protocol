@@ -13,8 +13,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use rand::{Rng, rng};
 use subtle::ConstantTimeEq;
+use zeroize::Zeroize;
 
-use crate::core::memory::traits::zeroize::Zeroize;
 use crate::core::memory::traits::protection::MemoryProtection;
 use crate::core::memory::error::{Error, Result};
 use crate::core::memory::platforms::get_platform_impl;
@@ -446,22 +446,9 @@ impl<T> Zeroize for SecureContainer<T> {
         unsafe {
             let ptr = self.inner as *mut u8;
             
-            // Zero the memory using volatile writes
-            for i in 0..size {
-                ptr::write_volatile(ptr.add(i), 0);
-            }
-            
-            // Prevent compiler optimization by reading back the memory
-            let mut sum: u8 = 0;
-            for i in 0..size {
-                sum ^= ptr::read_volatile(ptr.add(i));
-            }
-            
-            // Use sum in a way that compiler can't optimize away
-            if sum != 0 {
-                // This should never happen, but the compiler doesn't know that
-                ptr::write_volatile(ptr, sum);
-            }
+            // Use zeroize crate's volatile_zero capability
+            let memory = std::slice::from_raw_parts_mut(ptr, size);
+            zeroize::Zeroize::zeroize(memory);
         }
     }
 }
