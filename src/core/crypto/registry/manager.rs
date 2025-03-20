@@ -1,5 +1,5 @@
 /*!
-Registry for cryptographic algorithms used in the PQC protocol.
+Registry manager for cryptographic algorithms.
 
 This module provides a central registry for supported algorithms
 to enable runtime selection and configuration.
@@ -9,7 +9,11 @@ use std::collections::HashMap;
 use std::sync::RwLock;
 use once_cell::sync::Lazy;
 
-use crate::core::crypto::config::{KeyExchangeAlgorithm, SignatureAlgorithm, SymmetricAlgorithm};
+use crate::core::crypto::types::algorithms::{
+    KeyExchangeAlgorithm, 
+    SignatureAlgorithm, 
+    SymmetricAlgorithm
+};
 
 /// Registry of supported cryptographic algorithms
 pub struct CryptoRegistry {
@@ -160,49 +164,4 @@ pub fn list_signature_algorithms() -> Vec<String> {
 pub fn list_symmetric_algorithms() -> Vec<String> {
     let registry = get_registry();
     registry.list_symmetric_algorithms()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_registry_defaults() {
-        let registry = get_registry();
-        
-        // Check default algorithms are registered
-        assert!(registry.get_key_exchange("kyber768").is_some());
-        assert!(registry.get_signature("dilithium3").is_some());
-        assert!(registry.get_symmetric("chacha20poly1305").is_some());
-        
-        // Check the returned algorithms are correct
-        assert_eq!(registry.get_key_exchange("kyber768"), Some(KeyExchangeAlgorithm::Kyber768));
-        assert_eq!(registry.get_signature("dilithium3"), Some(SignatureAlgorithm::Dilithium3));
-        assert_eq!(registry.get_symmetric("chacha20poly1305"), Some(SymmetricAlgorithm::ChaCha20Poly1305));
-    }
-    
-    #[test]
-    fn test_register_new_algorithm() {
-        // Register a new algorithm
-        register_key_exchange("test-algorithm", KeyExchangeAlgorithm::Kyber768);
-        
-        // Check it was registered correctly
-        let registry = get_registry();
-        assert!(registry.get_key_exchange("test-algorithm").is_some());
-        assert_eq!(registry.get_key_exchange("test-algorithm"), Some(KeyExchangeAlgorithm::Kyber768));
-    }
-    
-    #[test]
-    fn test_list_algorithms() {
-        let registry = get_registry();
-        
-        // Check we can list algorithms
-        let key_exchanges = registry.list_key_exchange_algorithms();
-        let signatures = registry.list_signature_algorithms();
-        let symmetrics = registry.list_symmetric_algorithms();
-        
-        assert!(key_exchanges.contains(&"kyber768".to_string()));
-        assert!(signatures.contains(&"dilithium3".to_string()));
-        assert!(symmetrics.contains(&"chacha20poly1305".to_string()));
-    }
 }

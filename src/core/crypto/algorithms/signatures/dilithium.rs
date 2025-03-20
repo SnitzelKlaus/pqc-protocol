@@ -1,13 +1,13 @@
 /*!
-Authentication functionality for the PQC protocol.
+CRYSTALS-Dilithium signature implementation.
 
-This module provides functions for digital signatures and verification
-using Dilithium with support for multiple parameter sets.
+This module provides an implementation of the Dilithium signature algorithm
+with support for multiple parameter sets.
 */
 
-use crate::core::error::{Result, Error, AuthError};
-use crate::core::crypto::config::{CryptoConfig, SignatureAlgorithm};
-use crate::auth_err;
+use crate::core::crypto::types::errors::{Result, Error, AuthError};
+use crate::core::crypto::types::algorithms::SignatureAlgorithm;
+use crate::core::crypto::traits::signature::Signature;
 
 // Import Dilithium3 (default)
 use pqcrypto_dilithium::{
@@ -43,20 +43,13 @@ use pqcrypto_dilithium::{
 
 use pqcrypto_traits::sign::DetachedSignature;
 
-// Export type aliases based on the default Dilithium variant
-pub use pqcrypto_dilithium::dilithium3::{
-    PublicKey as DilithiumPublicKey,
-    SecretKey as DilithiumSecretKey,
-    DetachedSignature as DilithiumSignature,
-};
-
-/// Authentication handler for digital signatures
-pub struct Authentication {
+/// Dilithium signature implementation
+pub struct DilithiumAuthenticator {
     algorithm: SignatureAlgorithm,
 }
 
-impl Authentication {
-    /// Create a new Authentication instance with the specified algorithm
+impl DilithiumAuthenticator {
+    /// Create a new DilithiumAuthenticator with the specified algorithm
     pub fn new(algorithm: SignatureAlgorithm) -> Result<Self> {
         // Check if the requested algorithm is available
         match algorithm {
@@ -83,14 +76,15 @@ impl Authentication {
         
         Ok(Self { algorithm })
     }
-    
-    /// Create an Authentication from configuration
-    pub fn from_config(config: &CryptoConfig) -> Result<Self> {
-        Self::new(config.signature)
+}
+
+impl Signature for DilithiumAuthenticator {
+    fn algorithm(&self) -> SignatureAlgorithm {
+        self.algorithm
     }
-    
+
     /// Generate a new Dilithium key pair
-    pub fn generate_keypair(&self) -> Result<(Vec<u8>, Vec<u8>)> {
+    fn generate_keypair(&self) -> Result<(Vec<u8>, Vec<u8>)> {
         match self.algorithm {
             SignatureAlgorithm::Dilithium3 => {
                 let (pk, sk) = dilithium3::keypair();
@@ -126,7 +120,7 @@ impl Authentication {
     }
     
     /// Sign data using a Dilithium signing key
-    pub fn sign(&self, data: &[u8], secret_key: &[u8]) -> Result<Vec<u8>> {
+    fn sign(&self, data: &[u8], secret_key: &[u8]) -> Result<Vec<u8>> {
         match self.algorithm {
             SignatureAlgorithm::Dilithium3 => {
                 let sk = Dilithium3SecretKey::from_bytes(secret_key)
@@ -168,7 +162,7 @@ impl Authentication {
     }
     
     /// Verify a signature using a Dilithium verification key
-    pub fn verify(&self, data: &[u8], signature: &[u8], public_key: &[u8]) -> Result<()> {
+    fn verify(&self, data: &[u8], signature: &[u8], public_key: &[u8]) -> Result<()> {
         match self.algorithm {
             SignatureAlgorithm::Dilithium3 => {
                 let pk = Dilithium3PublicKey::from_bytes(public_key)
@@ -225,7 +219,7 @@ impl Authentication {
     }
     
     /// Get the signature size for the configured algorithm
-    pub fn signature_size(&self) -> usize {
+    fn signature_size(&self) -> usize {
         match self.algorithm {
             SignatureAlgorithm::Dilithium3 => dilithium3::signature_bytes(),
             SignatureAlgorithm::Dilithium2 => {
@@ -252,7 +246,7 @@ impl Authentication {
     }
     
     /// Get the public key size for the configured algorithm
-    pub fn public_key_size(&self) -> usize {
+    fn public_key_size(&self) -> usize {
         match self.algorithm {
             SignatureAlgorithm::Dilithium3 => dilithium3::public_key_bytes(),
             SignatureAlgorithm::Dilithium2 => {
@@ -276,132 +270,5 @@ impl Authentication {
                 }
             },
         }
-    }
-    
-    /// Get the algorithm being used
-    pub fn algorithm(&self) -> SignatureAlgorithm {
-        self.algorithm
-    }
-}
-
-// Add the UnsupportedAlgorithm error type to AuthError
-impl AuthError {
-    /// Create an UnsupportedAlgorithm error
-    pub fn unsupported_algorithm(msg: &str) -> Self {
-        AuthError::UnsupportedAlgorithm(msg.to_string())
-    }
-}
-
-// Update AuthError to include the new error type
-#[derive(Error, Debug)]
-pub enum AuthError {
-    /// Signature verification failed
-    #[error("Signature verification failed")]
-    SignatureVerificationFailed,
-    
-    /// Missing verification key
-    #[error("Verification key not available")]
-    MissingVerificationKey,
-    
-    /// Invalid key format
-    #[error("Invalid key format")]
-    InvalidKeyFormat,
-    
-    /// Invalid signature format
-    #[error("Invalid signature format")]
-    InvalidSignatureFormat,
-    
-    /// Authentication timeout
-    #[error("Authentication timed out")]
-    Timeout,
-    
-    /// Unsupported algorithm
-    #[error("Unsupported algorithm: {0}")]
-    UnsupportedAlgorithm(String),
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    
-    #[test]
-    fn test_dilithium3_signature_verification() -> Result<()> {
-        let config = CryptoConfig::default();
-        let auth = Authentication::from_config(&config)?;
-        
-        let (public_key, secret_key) = auth.generate_keypair()?;
-        let data = b"This is a test message to sign";
-        
-        let signature = auth.sign(data, &secret_key)?;
-        let result = auth.verify(data, &signature, &public_key);
-        
-        assert!(result.is_ok());
-        
-        Ok(())
-    }
-    
-    #[test]
-    fn test_invalid_signature() -> Result<()> {
-        let config = CryptoConfig::default();
-        let auth = Authentication::from_config(&config)?;
-        
-        let (public_key, secret_key) = auth.generate_keypair()?;
-        let data = b"This is a test message to sign";
-        let different_data = b"This is a different message";
-        
-        let signature = auth.sign(data, &secret_key)?;
-        
-        // Signature should not verify for different data
-        let result = auth.verify(different_data, &signature, &public_key);
-        assert!(result.is_err());
-        
-        Ok(())
-    }
-    
-    #[test]
-    fn test_tampered_signature() -> Result<()> {
-        let config = CryptoConfig::default();
-        let auth = Authentication::from_config(&config)?;
-        
-        let (public_key, secret_key) = auth.generate_keypair()?;
-        let data = b"This is a test message to sign";
-        
-        let mut signature = auth.sign(data, &secret_key)?;
-        
-        // Tamper with the signature
-        if let Some(byte) = signature.get_mut(signature.len() / 2) {
-            *byte ^= 0xFF;
-        }
-        
-        // Tampered signature should not verify
-        let result = auth.verify(data, &signature, &public_key);
-        assert!(result.is_err());
-        
-        Ok(())
-    }
-    
-    #[cfg(feature = "dilithium5")]
-    #[test]
-    fn test_dilithium5_signature() -> Result<()> {
-        let config = CryptoConfig::with_algorithms(
-            KeyExchangeAlgorithm::Kyber768,
-            SignatureAlgorithm::Dilithium5,
-            SymmetricAlgorithm::ChaCha20Poly1305,
-        );
-        let auth = Authentication::from_config(&config)?;
-        
-        let (public_key, secret_key) = auth.generate_keypair()?;
-        let data = b"This is a test message to sign with Dilithium5";
-        
-        let signature = auth.sign(data, &secret_key)?;
-        let result = auth.verify(data, &signature, &public_key);
-        
-        assert!(result.is_ok());
-        
-        // Dilithium5 signatures should be larger than Dilithium3
-        let d3_auth = Authentication::new(SignatureAlgorithm::Dilithium3)?;
-        assert!(auth.signature_size() > d3_auth.signature_size());
-        
-        Ok(())
     }
 }

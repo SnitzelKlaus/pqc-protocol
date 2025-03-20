@@ -5,40 +5,40 @@ This module provides the cryptographic primitives used in the protocol,
 including key exchange, digital signatures, and symmetric encryption.
 */
 
-// Key exchange functionality
-pub mod key_exchange;
+// Public API
+pub mod api;
 
-// Authentication and signatures
-pub mod auth;
+// Core types
+pub mod types;
 
-// Symmetric encryption
-pub mod cipher;
+// Traits
+pub mod traits;
 
-// Config
-pub mod config;
+// Algorithm implementations
+pub mod algorithms;
 
 // Registry for algorithm management
 pub mod registry;
 
 // Re-export frequently used types
-
-// Kyber types
-pub use pqcrypto_kyber::kyber768::{
-    PublicKey as KyberPublicKey,
-    SecretKey as KyberSecretKey,
-    Ciphertext as KyberCiphertext
+pub use types::algorithms::{
+    KeyExchangeAlgorithm,
+    SignatureAlgorithm,
+    SymmetricAlgorithm,
 };
 
-// Dilithium types
-pub use pqcrypto_dilithium::dilithium3::{
-    PublicKey as DilithiumPublicKey,
-    SecretKey as DilithiumSecretKey,
-    DetachedSignature as DilithiumSignature
+pub use types::errors::{Error, Result};
+
+// Re-export high-level API
+pub use api::{
+    create_crypto_config,
+    generate_keypair,
+    encrypt_data,
+    decrypt_data,
+    sign_data,
+    verify_signature,
+    derive_encryption_key,
 };
 
-pub use cipher::Cipher;
-pub use registry::{
-    get_registry, register_key_exchange, register_signature, register_symmetric,
-    get_key_exchange, get_signature, get_symmetric,
-    list_key_exchange_algorithms, list_signature_algorithms, list_symmetric_algorithms
-};
+// Re-export configuration types
+pub use types::config::CryptoConfig;
